@@ -42,7 +42,7 @@
     position:fixed; right:20px; bottom:calc(20px + env(safe-area-inset-bottom));
     width:58px; height:58px; border-radius:50%; background:var(--pink); color:#fff;
     display:flex; align-items:center; justify-content:center; z-index:40;
-    box-shadow:0 8px 24px rgba(236,26,140,0.45);
+    box-shadow:0 8px 24px rgba(0,0,0,0.45);
   }
   .modal-overlay{
     position:fixed; inset:0; background:rgba(0,0,0,0.65); z-index:50;
@@ -100,6 +100,14 @@ const COLORS = {
   bg:"#0b0b0d", surface:"#161418", surfaceAlt:"#1d1a20", border:"#2b2730",
   yellow:"#F4E409", pink:"#EC1A8C", white:"#F5F5F0", gray:"#8d8894", red:"#FF5A5A",
 };
+const DEFAULT_THEME = { accent1: COLORS.yellow, accent2: COLORS.pink };
+const THEME_PRESETS = [
+  { id: "alltoral", name: "ALLTORAL Original", accent1: "#F4E409", accent2: "#EC1A8C" },
+  { id: "verde-roxo", name: "Verde & Roxo", accent1: "#4ADE80", accent2: "#A855F7" },
+  { id: "azul-laranja", name: "Azul & Laranja", accent1: "#38BDF8", accent2: "#FB923C" },
+  { id: "vermelho-ciano", name: "Vermelho & Ciano", accent1: "#FF4D6D", accent2: "#22D3EE" },
+  { id: "ouro-lima", name: "Ouro & Lima", accent1: "#FFD700", accent2: "#B4F42A" },
+];
 const MONTHS = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const todayISO = () => new Date().toISOString().slice(0,10);
 const fmtMoney = (v) => (v<0?"-R$ ":"R$ ") + Math.abs(v).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -121,6 +129,14 @@ const IconLeft = (p) => <Icon {...p} path="M15 18l-6-6 6-6" />;
 const IconRight = (p) => <Icon {...p} path="M9 18l6-6-6-6" />;
 const IconX = (p) => <Icon {...p} path="M18 6L6 18M6 6l12 12" />;
 const IconReset = (p) => <Icon {...p} path="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" />;
+const IconPalette = ({ size=16, color="currentColor" }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 2a10 10 0 1 0 10 10c0-1.1-.9-2-2-2h-2.6a2.4 2.4 0 0 1 0-4.8h.4a2 2 0 0 0 2-2c0-.6-.3-1.2-.7-1.6A9.96 9.96 0 0 0 12 2z" />
+    <circle cx="7.5" cy="10.5" r="1.1" fill={color} stroke="none" />
+    <circle cx="10.5" cy="7" r="1.1" fill={color} stroke="none" />
+    <circle cx="15" cy="7.5" r="1.1" fill={color} stroke="none" />
+  </svg>
+);
 
 function expandTransactions(transactions){
   const all = [];
@@ -137,7 +153,7 @@ function expandTransactions(transactions){
 }
 
 // --- lightweight dependency-free line chart ---
-function BalanceChart({ data }){
+function BalanceChart({ data, colorAccent1, colorAccent2 }){
   const width = 900, height = 220, padL = 50, padR = 20, padT = 15, padB = 25;
   if(!data.length) return <div style={{padding:30,color:COLORS.gray,fontSize:13,textAlign:"center"}}>Sem dados para mostrar ainda.</div>;
 
@@ -178,15 +194,15 @@ function BalanceChart({ data }){
         <line key={i} x1={padL} x2={width-padR} y1={padT+f*innerH} y2={padT+f*innerH} stroke={COLORS.border} strokeDasharray="3 3" />
       ))}
       <line x1={padL} x2={width-padR} y1={zeroY} y2={zeroY} stroke={COLORS.red} strokeDasharray="4 4" />
-      <path d={realPath} stroke={COLORS.yellow} strokeWidth="2.5" fill="none" />
-      <path d={projPath} stroke={COLORS.pink} strokeWidth="2.5" strokeDasharray="6 4" fill="none" />
+      <path d={realPath} stroke={colorAccent1} strokeWidth="2.5" fill="none" />
+      <path d={projPath} stroke={colorAccent2} strokeWidth="2.5" strokeDasharray="6 4" fill="none" />
       {[min, (min+max)/2, max].map((v,i)=>(
         <text key={i} x={4} y={y(v)+4} fontSize="10" fill={COLORS.gray}>{(v/1000).toFixed(1)}k</text>
       ))}
       {hover!=null && (
         <>
           <line x1={x(hover)} x2={x(hover)} y1={padT} y2={height-padB} stroke={COLORS.gray} strokeDasharray="2 2" />
-          <circle cx={x(hover)} cy={y(data[hover].saldo)} r="4" fill={hover<=splitIdx?COLORS.yellow:COLORS.pink} />
+          <circle cx={x(hover)} cy={y(data[hover].saldo)} r="4" fill={hover<=splitIdx?colorAccent1:colorAccent2} />
           <text x={Math.min(x(hover)+8, width-150)} y={padT+14} fontSize="11" fill={COLORS.white}>
             {data[hover].date.split("-").reverse().join("/")} · {fmtMoney(data[hover].saldo)}
           </text>
@@ -201,6 +217,8 @@ function App(){
   const [authError, setAuthError] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [initialBalance, setInitialBalance] = useState(0);
+  const [theme, setTheme] = useState(DEFAULT_THEME);
+  const [showThemeModal, setShowThemeModal] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [syncError, setSyncError] = useState(false);
   const [cursor, setCursor] = useState(() => {
@@ -223,6 +241,7 @@ function App(){
         const d = snap.exists ? snap.data() : {};
         setTransactions(d.transactions || []);
         setInitialBalance(d.initialBalance || 0);
+        setTheme(d.theme || DEFAULT_THEME);
         setLoaded(true);
         setSyncError(false);
       },
@@ -231,11 +250,28 @@ function App(){
     return () => unsub();
   }, [user]);
 
+  useEffect(() => {
+    document.documentElement.style.setProperty("--yellow", theme.accent1);
+    document.documentElement.style.setProperty("--pink", theme.accent2);
+  }, [theme]);
+
   function persist(newTx, newBal){
     if (!user) return;
     window.__db.collection("alltoral-fin").doc(user.uid)
-      .set({ transactions: newTx, initialBalance: newBal })
+      .set({ transactions: newTx, initialBalance: newBal }, { merge: true })
       .catch((e) => { console.error(e); setSyncError(true); });
+  }
+
+  function persistTheme(newTheme){
+    if (!user) return;
+    window.__db.collection("alltoral-fin").doc(user.uid)
+      .set({ theme: newTheme }, { merge: true })
+      .catch((e) => { console.error(e); setSyncError(true); });
+  }
+
+  function applyTheme(newTheme){
+    setTheme(newTheme);
+    persistTheme(newTheme);
   }
 
   function signIn(){
@@ -326,8 +362,8 @@ function App(){
         <div className="oswald" style={{ fontSize:26, fontWeight:700, marginBottom:6 }}>
           DINHEIROS
         </div>
-        <div className="oswald" style={{ fontSize:11, color:COLORS.yellow, marginBottom:36, letterSpacing:"0.15em" }}>
-          — DESENVOLVIDO POR <span style={{color:COLORS.pink}}>ALLTORAL</span>
+        <div className="oswald" style={{ fontSize:11, color:theme.accent1, marginBottom:36, letterSpacing:"0.15em" }}>
+          — DESENVOLVIDO POR <span style={{color:theme.accent2}}>ALLTORAL</span>
         </div>
         <button className="at-btn" onClick={signIn} style={{
           display:"flex", alignItems:"center", gap:10, background:"#fff", color:"#1f1f1f",
@@ -360,8 +396,8 @@ function App(){
         <div style={{ maxWidth:980, margin:"0 auto", display:"flex", alignItems:"center", justifyContent:"space-between", gap:12 }}>
           <div>
             <div className="oswald" style={{ fontSize:20, fontWeight:700 }}>DINHEIROS</div>
-            <div className="oswald" style={{ fontSize:10, color:COLORS.yellow, marginTop:2, letterSpacing:"0.12em" }}>
-              — DESENVOLVIDO POR <span style={{color:COLORS.pink}}>ALLTORAL</span>
+            <div className="oswald" style={{ fontSize:10, color:theme.accent1, marginTop:2, letterSpacing:"0.12em" }}>
+              — DESENVOLVIDO POR <span style={{color:theme.accent2}}>ALLTORAL</span>
             </div>
           </div>
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
@@ -369,6 +405,9 @@ function App(){
               <span style={{ width:6, height:6, borderRadius:"50%", background: syncError?COLORS.red:"#4ade80", display:"inline-block" }}></span>
               <span className="hide-mobile">{syncError ? "Erro" : "Sincronizado"}</span>
             </div>
+            <button className="at-btn" onClick={()=>setShowThemeModal(true)} aria-label="Tema" style={{ background:"transparent", color:COLORS.gray, padding:4, display:"flex", alignItems:"center" }}>
+              <IconPalette size={17} color={COLORS.gray} />
+            </button>
             {user.photoURL && <img src={user.photoURL} alt="" style={{ width:26, height:26, borderRadius:"50%" }} />}
             <button className="at-btn oswald" onClick={signOut} style={{ background:"transparent", color:COLORS.gray, fontSize:10, textDecoration:"underline", padding:"6px 2px" }}>Sair</button>
           </div>
@@ -382,19 +421,19 @@ function App(){
       <div style={{ maxWidth:980, margin:"0 auto", padding:"24px 20px 0" }}>
         <div className="grid4" style={{ marginBottom:24 }}>
           <div style={{ background:COLORS.surface, border:`1px solid ${COLORS.border}`, borderRadius:10, padding:"18px 20px" }}>
-            <div className="oswald" style={{ fontSize:11, color:COLORS.pink }}>— SALDO ATUAL</div>
+            <div className="oswald" style={{ fontSize:11, color:theme.accent2 }}>— SALDO ATUAL</div>
             <div className="playfair" style={{ fontSize:32, fontWeight:900, marginTop:8, color: currentBalance<0?COLORS.red:COLORS.white }}>{fmtMoney(currentBalance)}</div>
             <div style={{ marginTop:10, fontSize:12, color:COLORS.gray }}>
-              Em 30 dias: <span style={{ color: projected30<0?COLORS.red:COLORS.yellow, fontWeight:600 }}>{fmtMoney(projected30)}</span>
+              Em 30 dias: <span style={{ color: projected30<0?COLORS.red:theme.accent1, fontWeight:600 }}>{fmtMoney(projected30)}</span>
             </div>
           </div>
           <div style={{ background:COLORS.surface, border:`1px solid ${COLORS.border}`, borderRadius:10, padding:"16px 18px" }}>
-            <div className="oswald" style={{ fontSize:10, color:COLORS.gray, display:"flex", alignItems:"center", gap:6 }}><IconUp size={13} color={COLORS.yellow}/> ENTRADAS</div>
-            <div className="playfair" style={{ fontSize:20, fontWeight:700, marginTop:8, color:COLORS.yellow }}>{fmtMoney(monthTotals.entrada)}</div>
+            <div className="oswald" style={{ fontSize:10, color:COLORS.gray, display:"flex", alignItems:"center", gap:6 }}><IconUp size={13} color={theme.accent1}/> ENTRADAS</div>
+            <div className="playfair" style={{ fontSize:20, fontWeight:700, marginTop:8, color:theme.accent1 }}>{fmtMoney(monthTotals.entrada)}</div>
           </div>
           <div style={{ background:COLORS.surface, border:`1px solid ${COLORS.border}`, borderRadius:10, padding:"16px 18px" }}>
-            <div className="oswald" style={{ fontSize:10, color:COLORS.gray, display:"flex", alignItems:"center", gap:6 }}><IconDown size={13} color={COLORS.pink}/> SAÍDAS</div>
-            <div className="playfair" style={{ fontSize:20, fontWeight:700, marginTop:8, color:COLORS.pink }}>{fmtMoney(monthTotals.saida)}</div>
+            <div className="oswald" style={{ fontSize:10, color:COLORS.gray, display:"flex", alignItems:"center", gap:6 }}><IconDown size={13} color={theme.accent2}/> SAÍDAS</div>
+            <div className="playfair" style={{ fontSize:20, fontWeight:700, marginTop:8, color:theme.accent2 }}>{fmtMoney(monthTotals.saida)}</div>
           </div>
           <div style={{ background:COLORS.surface, border:`1px solid ${COLORS.border}`, borderRadius:10, padding:"16px 18px" }}>
             <div className="oswald" style={{ fontSize:10, color:COLORS.gray, display:"flex", alignItems:"center", gap:6 }}><IconWallet size={13} color={COLORS.gray}/> SALDO INICIAL</div>
@@ -405,7 +444,7 @@ function App(){
 
         <div style={{ background:COLORS.surface, border:`1px solid ${COLORS.border}`, borderRadius:10, padding:"18px 10px 8px", marginBottom:24 }}>
           <div className="oswald" style={{ fontSize:11, color:COLORS.gray, padding:"0 10px 10px" }}>PROJEÇÃO DE SALDO</div>
-          <BalanceChart data={withBalance} />
+          <BalanceChart data={withBalance} colorAccent1={theme.accent1} colorAccent2={theme.accent2} />
         </div>
 
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
@@ -425,8 +464,8 @@ function App(){
               <div style={{ display:"flex", alignItems:"center", gap:6, overflow:"hidden", textOverflow:"ellipsis" }}>
                 {t.desc}{t.recurring && <IconRepeat size={12} color={COLORS.gray}/>}
               </div>
-              <div className="hide-mobile" style={{ color:COLORS.yellow }}>{t.type==="entrada"?fmtMoney(t.amount):""}</div>
-              <div className="hide-mobile" style={{ color:COLORS.pink }}>{t.type==="saida"?fmtMoney(t.amount):""}</div>
+              <div className="hide-mobile" style={{ color:theme.accent1 }}>{t.type==="entrada"?fmtMoney(t.amount):""}</div>
+              <div className="hide-mobile" style={{ color:theme.accent2 }}>{t.type==="saida"?fmtMoney(t.amount):""}</div>
               <div style={{ fontWeight:600, color: t.saldo<0?COLORS.red:COLORS.white }}>{fmtMoney(t.saldo)}</div>
               <button className="at-btn" onClick={()=>removeTransaction(t.id)} style={{ background:"transparent", color:COLORS.gray, padding:4 }}><IconTrash size={14}/></button>
             </div>
@@ -434,8 +473,8 @@ function App(){
           {monthRows.length>0 && (
             <div className="oswald rowgrid" style={{ padding:"12px 14px", fontSize:11, color:COLORS.gray, background:COLORS.surfaceAlt }}>
               <div></div><div>TOTAL DO MÊS</div>
-              <div className="hide-mobile" style={{ color:COLORS.yellow }}>{fmtMoney(monthTotals.entrada)}</div>
-              <div className="hide-mobile" style={{ color:COLORS.pink }}>{fmtMoney(monthTotals.saida)}</div>
+              <div className="hide-mobile" style={{ color:theme.accent1 }}>{fmtMoney(monthTotals.entrada)}</div>
+              <div className="hide-mobile" style={{ color:theme.accent2 }}>{fmtMoney(monthTotals.saida)}</div>
               <div style={{ color:COLORS.white, fontWeight:700 }}>{fmtMoney(monthTotals.saldoFinal ?? currentBalance)}</div>
               <div></div>
             </div>
@@ -458,8 +497,8 @@ function App(){
               <button className="at-btn" onClick={()=>setShowForm(false)} style={{ background:"transparent", color:COLORS.gray }}><IconX size={18}/></button>
             </div>
             <div style={{ display:"flex", gap:8, marginBottom:14 }}>
-              <button className="at-btn oswald" onClick={()=>setForm(f=>({...f,type:"entrada"}))} style={{ flex:1, padding:"10px 0", fontSize:12, borderRadius:6, background: form.type==="entrada"?COLORS.yellow:COLORS.surfaceAlt, color: form.type==="entrada"?"#0b0b0d":COLORS.gray }}>Entrada</button>
-              <button className="at-btn oswald" onClick={()=>setForm(f=>({...f,type:"saida"}))} style={{ flex:1, padding:"10px 0", fontSize:12, borderRadius:6, background: form.type==="saida"?COLORS.pink:COLORS.surfaceAlt, color: form.type==="saida"?"#fff":COLORS.gray }}>Saída</button>
+              <button className="at-btn oswald" onClick={()=>setForm(f=>({...f,type:"entrada"}))} style={{ flex:1, padding:"10px 0", fontSize:12, borderRadius:6, background: form.type==="entrada"?theme.accent1:COLORS.surfaceAlt, color: form.type==="entrada"?"#0b0b0d":COLORS.gray }}>Entrada</button>
+              <button className="at-btn oswald" onClick={()=>setForm(f=>({...f,type:"saida"}))} style={{ flex:1, padding:"10px 0", fontSize:12, borderRadius:6, background: form.type==="saida"?theme.accent2:COLORS.surfaceAlt, color: form.type==="saida"?"#fff":COLORS.gray }}>Saída</button>
             </div>
             <label style={{ fontSize:11, color:COLORS.gray }}>Descrição</label>
             <input value={form.desc} onChange={(e)=>setForm(f=>({...f,desc:e.target.value}))} placeholder="Ex: Salário, Aluguel..."
@@ -487,9 +526,53 @@ function App(){
                   style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4 }} />
               </div>
             )}
-            <button className="at-btn oswald" onClick={addTransaction} style={{ width:"100%", background:COLORS.pink, color:"#fff", padding:"12px 0", borderRadius:6, fontSize:13, fontWeight:600 }}>
+            <button className="at-btn oswald" onClick={addTransaction} style={{ width:"100%", background:theme.accent2, color:"#fff", padding:"12px 0", borderRadius:6, fontSize:13, fontWeight:600 }}>
               Adicionar
             </button>
+          </div>
+        </div>
+      )}
+
+      {showThemeModal && (
+        <div className="modal-overlay" onClick={(e)=>{ if(e.target===e.currentTarget) setShowThemeModal(false); }}>
+          <div className="modal-sheet">
+            <div className="sheet-handle"></div>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18 }}>
+              <div className="playfair" style={{ fontSize:20, fontWeight:700 }}>Tema</div>
+              <button className="at-btn" onClick={()=>setShowThemeModal(false)} style={{ background:"transparent", color:COLORS.gray }}><IconX size={18}/></button>
+            </div>
+
+            <div className="oswald" style={{ fontSize:11, color:COLORS.gray, marginBottom:10 }}>PALETAS PRONTAS</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:22 }}>
+              {THEME_PRESETS.map(p => {
+                const active = theme.accent1===p.accent1 && theme.accent2===p.accent2;
+                return (
+                  <button key={p.id} className="at-btn" onClick={()=>applyTheme({accent1:p.accent1, accent2:p.accent2})}
+                    style={{ display:"flex", alignItems:"center", gap:12, background:COLORS.surfaceAlt, border:`1px solid ${active?COLORS.white:COLORS.border}`, borderRadius:8, padding:"10px 14px" }}>
+                    <div style={{ display:"flex", gap:4 }}>
+                      <span style={{ width:18, height:18, borderRadius:"50%", background:p.accent1, display:"inline-block" }}></span>
+                      <span style={{ width:18, height:18, borderRadius:"50%", background:p.accent2, display:"inline-block" }}></span>
+                    </div>
+                    <span style={{ fontSize:13, color:COLORS.white }}>{p.name}</span>
+                    {active && <span style={{ marginLeft:"auto", fontSize:12, color:p.accent1 }}>✓</span>}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="oswald" style={{ fontSize:11, color:COLORS.gray, marginBottom:10 }}>PERSONALIZADO</div>
+            <div style={{ display:"flex", gap:16, marginBottom:6 }}>
+              <div style={{ flex:1 }}>
+                <label style={{ fontSize:11, color:COLORS.gray }}>Cor 1 (destaque)</label>
+                <input type="color" value={theme.accent1} onChange={(e)=>applyTheme({...theme, accent1:e.target.value})}
+                  style={{ width:"100%", height:42, marginTop:6, border:`1px solid ${COLORS.border}`, borderRadius:6, background:"transparent", padding:2 }} />
+              </div>
+              <div style={{ flex:1 }}>
+                <label style={{ fontSize:11, color:COLORS.gray }}>Cor 2 (destaque)</label>
+                <input type="color" value={theme.accent2} onChange={(e)=>applyTheme({...theme, accent2:e.target.value})}
+                  style={{ width:"100%", height:42, marginTop:6, border:`1px solid ${COLORS.border}`, borderRadius:6, background:"transparent", padding:2 }} />
+              </div>
+            </div>
           </div>
         </div>
       )}
