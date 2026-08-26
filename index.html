@@ -100,13 +100,13 @@ const COLORS = {
   bg:"#0b0b0d", surface:"#161418", surfaceAlt:"#1d1a20", border:"#2b2730",
   yellow:"#F4E409", pink:"#EC1A8C", white:"#F5F5F0", gray:"#8d8894", red:"#FF5A5A",
 };
-const DEFAULT_THEME = { accent1: COLORS.yellow, accent2: COLORS.pink };
+const DEFAULT_THEME = { accent1: COLORS.yellow, accent2: COLORS.pink, accent3: "#C7CBD1" };
 const THEME_PRESETS = [
-  { id: "alltoral", name: "ALLTORAL Original", accent1: "#F4E409", accent2: "#EC1A8C" },
-  { id: "verde-roxo", name: "Verde & Roxo", accent1: "#4ADE80", accent2: "#A855F7" },
-  { id: "azul-laranja", name: "Azul & Laranja", accent1: "#38BDF8", accent2: "#FB923C" },
-  { id: "vermelho-ciano", name: "Vermelho & Ciano", accent1: "#FF4D6D", accent2: "#22D3EE" },
-  { id: "ouro-lima", name: "Ouro & Lima", accent1: "#FFD700", accent2: "#B4F42A" },
+  { id: "alltoral", name: "ALLTORAL Original", accent1: "#F4E409", accent2: "#EC1A8C", accent3: "#C7CBD1" },
+  { id: "verde-roxo", name: "Verde & Roxo", accent1: "#4ADE80", accent2: "#A855F7", accent3: "#FBBF24" },
+  { id: "azul-laranja", name: "Azul & Laranja", accent1: "#38BDF8", accent2: "#FB923C", accent3: "#E2E8F0" },
+  { id: "vermelho-ciano", name: "Vermelho & Ciano", accent1: "#FF4D6D", accent2: "#22D3EE", accent3: "#D1D5DB" },
+  { id: "ouro-lima", name: "Ouro & Lima", accent1: "#FFD700", accent2: "#B4F42A", accent3: "#9CA3AF" },
 ];
 const MONTHS = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const todayISO = () => new Date().toISOString().slice(0,10);
@@ -137,10 +137,18 @@ const IconPalette = ({ size=16, color="currentColor" }) => (
     <circle cx="15" cy="7.5" r="1.1" fill={color} stroke="none" />
   </svg>
 );
+const IconLayers = (p) => <Icon {...p} path="M12 2L2 8l10 6 10-6-10-6zM2 14l10 6 10-6M2 11l10 6 10-6" />;
 
 function expandTransactions(transactions){
   const all = [];
   transactions.forEach((t) => {
+    if(t.parcelado){
+      const total = (t.installments||[]).length;
+      (t.installments||[]).forEach((inst) => {
+        all.push({ ...t, key:`${t.id}-${inst.seq}`, date:inst.date, amount:inst.amount, installmentSeq:inst.seq, installmentTotal: total });
+      });
+      return;
+    }
     if(!t.recurring){ all.push({...t, key:t.id, date:t.date}); return; }
     const [y,m,d] = t.date.split("-").map(Number);
     const months = t.repeatMonths || 12;
@@ -226,7 +234,9 @@ function App(){
     return { year: n.getFullYear(), month: n.getMonth() };
   });
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ date: todayISO(), desc:"", type:"entrada", amount:"", recurring:false, repeatMonths:12 });
+  const [form, setForm] = useState({ date: todayISO(), desc:"", type:"entrada", amount:"", mode:"unico", repeatMonths:12, installmentCount:2 });
+  const [editingParcelId, setEditingParcelId] = useState(null);
+  const [draftInstallments, setDraftInstallments] = useState([]);
 
   useEffect(() => {
     const unsub = window.__auth.onAuthStateChanged((u) => setUser(u || null));
@@ -254,6 +264,12 @@ function App(){
     document.documentElement.style.setProperty("--yellow", theme.accent1);
     document.documentElement.style.setProperty("--pink", theme.accent2);
   }, [theme]);
+
+  useEffect(() => {
+    if(!editingParcelId){ setDraftInstallments([]); return; }
+    const tx = transactions.find(t => t.id === editingParcelId);
+    setDraftInstallments(tx && tx.installments ? tx.installments.map(i=>({...i})) : []);
+  }, [editingParcelId]);
 
   function persist(newTx, newBal){
     if (!user) return;
@@ -317,13 +333,29 @@ function App(){
   function addTransaction(){
     const amount = parseFloat(String(form.amount).replace(",", "."));
     if(!form.desc.trim() || !amount || amount<=0 || !form.date) return;
-    const newTx = [...transactions, {
-      id: uid(), date: form.date, desc: form.desc.trim(), type: form.type, amount,
-      recurring: form.recurring, repeatMonths: form.recurring ? (Number(form.repeatMonths)||12) : 1,
-    }];
+
+    let newTx;
+    if(form.mode === "parcelado"){
+      const count = Math.max(2, Number(form.installmentCount)||2);
+      const [y,m,d] = form.date.split("-").map(Number);
+      const installments = Array.from({length:count}, (_,i) => {
+        const dt = new Date(y, m-1+i, d);
+        return {
+          seq: i+1,
+          date: `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`,
+          amount,
+        };
+      });
+      newTx = [...transactions, { id: uid(), desc: form.desc.trim(), type: form.type, parcelado:true, installments }];
+    } else {
+      newTx = [...transactions, {
+        id: uid(), date: form.date, desc: form.desc.trim(), type: form.type, amount,
+        recurring: form.mode==="fixo", repeatMonths: form.mode==="fixo" ? (Number(form.repeatMonths)||12) : 1,
+      }];
+    }
     setTransactions(newTx);
     persist(newTx, initialBalance);
-    setForm({ date: todayISO(), desc:"", type:"entrada", amount:"", recurring:false, repeatMonths:12 });
+    setForm({ date: todayISO(), desc:"", type:"entrada", amount:"", mode:"unico", repeatMonths:12, installmentCount:2 });
     setShowForm(false);
   }
   function removeTransaction(id){
@@ -346,6 +378,12 @@ function App(){
     if(!window.confirm("Isso vai apagar todos os lançamentos salvos em todos os dispositivos. Continuar?")) return;
     setTransactions([]); setInitialBalance(0);
     persist([], 0);
+  }
+  function saveParcelamento(){
+    const newTx = transactions.map(t => t.id === editingParcelId ? {...t, installments: draftInstallments} : t);
+    setTransactions(newTx);
+    persist(newTx, initialBalance);
+    setEditingParcelId(null);
   }
 
   if (user === undefined) {
@@ -462,10 +500,19 @@ function App(){
             <div key={t.key} className="row-hover rowgrid" style={{ padding:"12px 14px", borderBottom:`1px solid ${COLORS.border}`, fontSize:13 }}>
               <div style={{ color:COLORS.gray }}>{t.date.slice(8,10)}/{t.date.slice(5,7)}</div>
               <div style={{ display:"flex", alignItems:"center", gap:6, overflow:"hidden", textOverflow:"ellipsis" }}>
-                {t.desc}{t.recurring && <IconRepeat size={12} color={COLORS.gray}/>}
+                <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{t.desc}</span>
+                {t.recurring && <IconRepeat size={12} color={COLORS.gray}/>}
+                {t.parcelado && (
+                  <button className="at-btn oswald" onClick={()=>setEditingParcelId(t.id)} title="Editar parcelas" style={{
+                    fontSize:9, color:theme.accent3, border:`1px solid ${theme.accent3}`, borderRadius:4, padding:"1px 6px",
+                    background:"transparent", whiteSpace:"nowrap", flexShrink:0,
+                  }}>
+                    {t.installmentSeq}/{t.installmentTotal} ✎
+                  </button>
+                )}
               </div>
-              <div className="hide-mobile" style={{ color:theme.accent1 }}>{t.type==="entrada"?fmtMoney(t.amount):""}</div>
-              <div className="hide-mobile" style={{ color:theme.accent2 }}>{t.type==="saida"?fmtMoney(t.amount):""}</div>
+              <div className="hide-mobile" style={{ color: t.parcelado ? theme.accent3 : theme.accent1 }}>{t.type==="entrada"?fmtMoney(t.amount):""}</div>
+              <div className="hide-mobile" style={{ color: t.parcelado ? theme.accent3 : theme.accent2 }}>{t.type==="saida"?fmtMoney(t.amount):""}</div>
               <div style={{ fontWeight:600, color: t.saldo<0?COLORS.red:COLORS.white }}>{fmtMoney(t.saldo)}</div>
               <button className="at-btn" onClick={()=>removeTransaction(t.id)} style={{ background:"transparent", color:COLORS.gray, padding:4 }}><IconTrash size={14}/></button>
             </div>
@@ -496,37 +543,54 @@ function App(){
               <div className="playfair" style={{ fontSize:20, fontWeight:700 }}>Novo lançamento</div>
               <button className="at-btn" onClick={()=>setShowForm(false)} style={{ background:"transparent", color:COLORS.gray }}><IconX size={18}/></button>
             </div>
-            <div style={{ display:"flex", gap:8, marginBottom:14 }}>
+
+            <div style={{ display:"flex", gap:8, marginBottom:10 }}>
               <button className="at-btn oswald" onClick={()=>setForm(f=>({...f,type:"entrada"}))} style={{ flex:1, padding:"10px 0", fontSize:12, borderRadius:6, background: form.type==="entrada"?theme.accent1:COLORS.surfaceAlt, color: form.type==="entrada"?"#0b0b0d":COLORS.gray }}>Entrada</button>
               <button className="at-btn oswald" onClick={()=>setForm(f=>({...f,type:"saida"}))} style={{ flex:1, padding:"10px 0", fontSize:12, borderRadius:6, background: form.type==="saida"?theme.accent2:COLORS.surfaceAlt, color: form.type==="saida"?"#fff":COLORS.gray }}>Saída</button>
             </div>
+
+            <div style={{ display:"flex", gap:6, marginBottom:14 }}>
+              <button className="at-btn oswald" onClick={()=>setForm(f=>({...f,mode:"unico"}))} style={{ flex:1, padding:"8px 0", fontSize:10, borderRadius:6, background: form.mode==="unico"?COLORS.white:COLORS.surfaceAlt, color: form.mode==="unico"?"#0b0b0d":COLORS.gray }}>Único</button>
+              <button className="at-btn oswald" onClick={()=>setForm(f=>({...f,mode:"fixo"}))} style={{ flex:1, padding:"8px 0", fontSize:10, borderRadius:6, background: form.mode==="fixo"?COLORS.white:COLORS.surfaceAlt, color: form.mode==="fixo"?"#0b0b0d":COLORS.gray }}>Fixo mensal</button>
+              <button className="at-btn oswald" onClick={()=>setForm(f=>({...f,mode:"parcelado"}))} style={{ flex:1, padding:"8px 0", fontSize:10, borderRadius:6, background: form.mode==="parcelado"?theme.accent3:COLORS.surfaceAlt, color: form.mode==="parcelado"?"#0b0b0d":COLORS.gray }}>Parcelado</button>
+            </div>
+
             <label style={{ fontSize:11, color:COLORS.gray }}>Descrição</label>
-            <input value={form.desc} onChange={(e)=>setForm(f=>({...f,desc:e.target.value}))} placeholder="Ex: Salário, Aluguel..."
+            <input value={form.desc} onChange={(e)=>setForm(f=>({...f,desc:e.target.value}))} placeholder="Ex: Salário, Aluguel, Celular novo..."
               style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4, marginBottom:12 }} />
             <div style={{ display:"flex", gap:10, marginBottom:12 }}>
               <div style={{ flex:1 }}>
-                <label style={{ fontSize:11, color:COLORS.gray }}>Data</label>
+                <label style={{ fontSize:11, color:COLORS.gray }}>{form.mode==="parcelado" ? "Data da 1ª parcela" : "Data"}</label>
                 <input type="date" value={form.date} onChange={(e)=>setForm(f=>({...f,date:e.target.value}))}
                   style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4 }} />
               </div>
               <div style={{ flex:1 }}>
-                <label style={{ fontSize:11, color:COLORS.gray }}>Valor (R$)</label>
+                <label style={{ fontSize:11, color:COLORS.gray }}>{form.mode==="parcelado" ? "Valor da parcela (R$)" : "Valor (R$)"}</label>
                 <input type="number" value={form.amount} onChange={(e)=>setForm(f=>({...f,amount:e.target.value}))} placeholder="0,00"
                   style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4 }} />
               </div>
             </div>
-            <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:COLORS.gray, marginBottom: form.recurring?8:16, cursor:"pointer" }}>
-              <input type="checkbox" checked={form.recurring} onChange={(e)=>setForm(f=>({...f,recurring:e.target.checked}))} />
-              Repetir todo mês (lançamento fixo)
-            </label>
-            {form.recurring && (
+
+            {form.mode==="fixo" && (
               <div style={{ marginBottom:16 }}>
                 <label style={{ fontSize:11, color:COLORS.gray }}>Repetir por quantos meses</label>
                 <input type="number" value={form.repeatMonths} onChange={(e)=>setForm(f=>({...f,repeatMonths:e.target.value}))}
                   style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4 }} />
               </div>
             )}
-            <button className="at-btn oswald" onClick={addTransaction} style={{ width:"100%", background:theme.accent2, color:"#fff", padding:"12px 0", borderRadius:6, fontSize:13, fontWeight:600 }}>
+
+            {form.mode==="parcelado" && (
+              <div style={{ marginBottom:16 }}>
+                <label style={{ fontSize:11, color:COLORS.gray }}>Número de parcelas</label>
+                <input type="number" min="2" value={form.installmentCount} onChange={(e)=>setForm(f=>({...f,installmentCount:e.target.value}))}
+                  style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4 }} />
+                <div style={{ fontSize:11, color:theme.accent3, marginTop:8 }}>
+                  Cada parcela cai no mesmo dia, um mês após a outra. Dá pra ajustar o valor de cada uma depois, se precisar.
+                </div>
+              </div>
+            )}
+
+            <button className="at-btn oswald" onClick={addTransaction} style={{ width:"100%", background: form.mode==="parcelado" ? theme.accent3 : theme.accent2, color: form.mode==="parcelado" ? "#0b0b0d" : "#fff", padding:"12px 0", borderRadius:6, fontSize:13, fontWeight:600 }}>
               Adicionar
             </button>
           </div>
@@ -545,13 +609,14 @@ function App(){
             <div className="oswald" style={{ fontSize:11, color:COLORS.gray, marginBottom:10 }}>PALETAS PRONTAS</div>
             <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:22 }}>
               {THEME_PRESETS.map(p => {
-                const active = theme.accent1===p.accent1 && theme.accent2===p.accent2;
+                const active = theme.accent1===p.accent1 && theme.accent2===p.accent2 && theme.accent3===p.accent3;
                 return (
-                  <button key={p.id} className="at-btn" onClick={()=>applyTheme({accent1:p.accent1, accent2:p.accent2})}
+                  <button key={p.id} className="at-btn" onClick={()=>applyTheme({accent1:p.accent1, accent2:p.accent2, accent3:p.accent3})}
                     style={{ display:"flex", alignItems:"center", gap:12, background:COLORS.surfaceAlt, border:`1px solid ${active?COLORS.white:COLORS.border}`, borderRadius:8, padding:"10px 14px" }}>
                     <div style={{ display:"flex", gap:4 }}>
-                      <span style={{ width:18, height:18, borderRadius:"50%", background:p.accent1, display:"inline-block" }}></span>
-                      <span style={{ width:18, height:18, borderRadius:"50%", background:p.accent2, display:"inline-block" }}></span>
+                      <span style={{ width:16, height:16, borderRadius:"50%", background:p.accent1, display:"inline-block" }}></span>
+                      <span style={{ width:16, height:16, borderRadius:"50%", background:p.accent2, display:"inline-block" }}></span>
+                      <span style={{ width:16, height:16, borderRadius:"50%", background:p.accent3, display:"inline-block" }}></span>
                     </div>
                     <span style={{ fontSize:13, color:COLORS.white }}>{p.name}</span>
                     {active && <span style={{ marginLeft:"auto", fontSize:12, color:p.accent1 }}>✓</span>}
@@ -561,21 +626,66 @@ function App(){
             </div>
 
             <div className="oswald" style={{ fontSize:11, color:COLORS.gray, marginBottom:10 }}>PERSONALIZADO</div>
-            <div style={{ display:"flex", gap:16, marginBottom:6 }}>
+            <div style={{ display:"flex", gap:12, marginBottom:6 }}>
               <div style={{ flex:1 }}>
-                <label style={{ fontSize:11, color:COLORS.gray }}>Cor 1 (destaque)</label>
+                <label style={{ fontSize:10, color:COLORS.gray }}>Cor 1</label>
                 <input type="color" value={theme.accent1} onChange={(e)=>applyTheme({...theme, accent1:e.target.value})}
                   style={{ width:"100%", height:42, marginTop:6, border:`1px solid ${COLORS.border}`, borderRadius:6, background:"transparent", padding:2 }} />
               </div>
               <div style={{ flex:1 }}>
-                <label style={{ fontSize:11, color:COLORS.gray }}>Cor 2 (destaque)</label>
+                <label style={{ fontSize:10, color:COLORS.gray }}>Cor 2</label>
                 <input type="color" value={theme.accent2} onChange={(e)=>applyTheme({...theme, accent2:e.target.value})}
+                  style={{ width:"100%", height:42, marginTop:6, border:`1px solid ${COLORS.border}`, borderRadius:6, background:"transparent", padding:2 }} />
+              </div>
+              <div style={{ flex:1 }}>
+                <label style={{ fontSize:10, color:COLORS.gray }}>Cor parcelas</label>
+                <input type="color" value={theme.accent3} onChange={(e)=>applyTheme({...theme, accent3:e.target.value})}
                   style={{ width:"100%", height:42, marginTop:6, border:`1px solid ${COLORS.border}`, borderRadius:6, background:"transparent", padding:2 }} />
               </div>
             </div>
           </div>
         </div>
       )}
+
+      {editingParcelId && (() => {
+        const tx = transactions.find(t => t.id === editingParcelId);
+        if(!tx) return null;
+        const total = draftInstallments.reduce((s,i)=> s + (parseFloat(i.amount)||0), 0);
+        return (
+          <div className="modal-overlay" onClick={(e)=>{ if(e.target===e.currentTarget) setEditingParcelId(null); }}>
+            <div className="modal-sheet">
+              <div className="sheet-handle"></div>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
+                <div className="playfair" style={{ fontSize:20, fontWeight:700 }}>Editar parcelamento</div>
+                <button className="at-btn" onClick={()=>setEditingParcelId(null)} style={{ background:"transparent", color:COLORS.gray }}><IconX size={18}/></button>
+              </div>
+              <div style={{ fontSize:12, color:COLORS.gray, marginBottom:16, display:"flex", alignItems:"center", gap:6 }}>
+                <IconLayers size={12} color={theme.accent3}/> {tx.desc}
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", gap:10, marginBottom:16, maxHeight:"48vh", overflowY:"auto" }}>
+                {draftInstallments.map((inst, idx) => (
+                  <div key={inst.seq} style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <div className="oswald" style={{ fontSize:10, color:theme.accent3, width:60, flexShrink:0 }}>PARC. {inst.seq}</div>
+                    <div style={{ fontSize:11, color:COLORS.gray, width:56, flexShrink:0 }}>{inst.date.slice(8,10)}/{inst.date.slice(5,7)}/{inst.date.slice(0,4)}</div>
+                    <input type="number" value={inst.amount}
+                      onChange={(e)=>{
+                        const v = parseFloat(e.target.value)||0;
+                        setDraftInstallments(arr => arr.map((x,i)=> i===idx ? {...x, amount:v} : x));
+                      }}
+                      style={{ flex:1, background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"8px 10px", color:COLORS.white }} />
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize:12, color:COLORS.gray, marginBottom:16, textAlign:"right" }}>
+                Total: <span style={{ color:theme.accent3, fontWeight:600 }}>{fmtMoney(total)}</span>
+              </div>
+              <button className="at-btn oswald" onClick={saveParcelamento} style={{ width:"100%", background:theme.accent3, color:"#0b0b0d", padding:"12px 0", borderRadius:6, fontSize:13, fontWeight:600 }}>
+                Salvar alterações
+              </button>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
