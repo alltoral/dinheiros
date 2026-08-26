@@ -36,7 +36,7 @@
   .at-btn:active{ transform:scale(0.96); }
   .row-hover:active{ background:var(--surfaceAlt); }
   .grid4{ display:grid; grid-template-columns:1.3fr 1fr 1fr 1fr; gap:14px; }
-  .rowgrid{ display:grid; grid-template-columns:70px 1fr 100px 100px 110px 32px; align-items:center; }
+  .rowgrid{ display:grid; grid-template-columns:70px 1fr 100px 100px 110px 56px; align-items:center; }
   .app-header{ position:sticky; top:0; z-index:30; -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px); }
   .fab{
     position:fixed; right:20px; bottom:calc(20px + env(safe-area-inset-bottom));
@@ -63,7 +63,7 @@
   }
   @media (max-width:720px){
     .grid4{ grid-template-columns:1fr 1fr; }
-    .rowgrid{ grid-template-columns:56px 1fr 90px 32px; }
+    .rowgrid{ grid-template-columns:56px 1fr 90px 56px; }
     .hide-mobile{ display:none !important; }
   }
 </style>
@@ -138,6 +138,7 @@ const IconPalette = ({ size=16, color="currentColor" }) => (
   </svg>
 );
 const IconLayers = (p) => <Icon {...p} path="M12 2L2 8l10 6 10-6-10-6zM2 14l10 6 10-6M2 11l10 6 10-6" />;
+const IconEdit = (p) => <Icon {...p} path="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />;
 
 function expandTransactions(transactions){
   const all = [];
@@ -237,6 +238,8 @@ function App(){
   const [form, setForm] = useState({ date: todayISO(), desc:"", type:"entrada", amount:"", mode:"unico", repeatMonths:12, installmentCount:2 });
   const [editingParcelId, setEditingParcelId] = useState(null);
   const [draftInstallments, setDraftInstallments] = useState([]);
+  const [editingTxId, setEditingTxId] = useState(null);
+  const [editForm, setEditForm] = useState(null);
 
   useEffect(() => {
     const unsub = window.__auth.onAuthStateChanged((u) => setUser(u || null));
@@ -385,6 +388,32 @@ function App(){
     persist(newTx, initialBalance);
     setEditingParcelId(null);
   }
+  function openEditModal(rowT){
+    const orig = transactions.find(x => x.id === rowT.id);
+    if(!orig) return;
+    setEditingTxId(orig.id);
+    setEditForm({
+      desc: orig.desc, type: orig.type, date: orig.date, amount: orig.amount,
+      recurring: !!orig.recurring, repeatMonths: orig.repeatMonths || 12,
+    });
+  }
+  function closeEditModal(){ setEditingTxId(null); setEditForm(null); }
+  function saveEditedTransaction(){
+    const amount = parseFloat(String(editForm.amount).replace(",", "."));
+    if(!editForm.desc.trim() || !amount || amount<=0 || !editForm.date) return;
+    const newTx = transactions.map(x => x.id === editingTxId ? {
+      ...x,
+      desc: editForm.desc.trim(),
+      type: editForm.type,
+      date: editForm.date,
+      amount,
+      recurring: editForm.recurring,
+      repeatMonths: editForm.recurring ? (Number(editForm.repeatMonths)||12) : 1,
+    } : x);
+    setTransactions(newTx);
+    persist(newTx, initialBalance);
+    closeEditModal();
+  }
 
   if (user === undefined) {
     return (
@@ -514,7 +543,10 @@ function App(){
               <div className="hide-mobile" style={{ color: t.parcelado ? theme.accent3 : theme.accent1 }}>{t.type==="entrada"?fmtMoney(t.amount):""}</div>
               <div className="hide-mobile" style={{ color: t.parcelado ? theme.accent3 : theme.accent2 }}>{t.type==="saida"?fmtMoney(t.amount):""}</div>
               <div style={{ fontWeight:600, color: t.saldo<0?COLORS.red:COLORS.white }}>{fmtMoney(t.saldo)}</div>
-              <button className="at-btn" onClick={()=>removeTransaction(t.id)} style={{ background:"transparent", color:COLORS.gray, padding:4 }}><IconTrash size={14}/></button>
+              <div style={{ display:"flex", gap:2, justifyContent:"flex-end" }}>
+                <button className="at-btn" onClick={()=> t.parcelado ? setEditingParcelId(t.id) : openEditModal(t)} style={{ background:"transparent", color:COLORS.gray, padding:4 }}><IconEdit size={13}/></button>
+                <button className="at-btn" onClick={()=>removeTransaction(t.id)} style={{ background:"transparent", color:COLORS.gray, padding:4 }}><IconTrash size={13}/></button>
+              </div>
             </div>
           ))}
           {monthRows.length>0 && (
@@ -592,6 +624,51 @@ function App(){
 
             <button className="at-btn oswald" onClick={addTransaction} style={{ width:"100%", background: form.mode==="parcelado" ? theme.accent3 : theme.accent2, color: form.mode==="parcelado" ? "#0b0b0d" : "#fff", padding:"12px 0", borderRadius:6, fontSize:13, fontWeight:600 }}>
               Adicionar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {editingTxId && editForm && (
+        <div className="modal-overlay" onClick={(e)=>{ if(e.target===e.currentTarget) closeEditModal(); }}>
+          <div className="modal-sheet">
+            <div className="sheet-handle"></div>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18 }}>
+              <div className="playfair" style={{ fontSize:20, fontWeight:700 }}>Editar lançamento</div>
+              <button className="at-btn" onClick={closeEditModal} style={{ background:"transparent", color:COLORS.gray }}><IconX size={18}/></button>
+            </div>
+            <div style={{ display:"flex", gap:8, marginBottom:14 }}>
+              <button className="at-btn oswald" onClick={()=>setEditForm(f=>({...f,type:"entrada"}))} style={{ flex:1, padding:"10px 0", fontSize:12, borderRadius:6, background: editForm.type==="entrada"?theme.accent1:COLORS.surfaceAlt, color: editForm.type==="entrada"?"#0b0b0d":COLORS.gray }}>Entrada</button>
+              <button className="at-btn oswald" onClick={()=>setEditForm(f=>({...f,type:"saida"}))} style={{ flex:1, padding:"10px 0", fontSize:12, borderRadius:6, background: editForm.type==="saida"?theme.accent2:COLORS.surfaceAlt, color: editForm.type==="saida"?"#fff":COLORS.gray }}>Saída</button>
+            </div>
+            <label style={{ fontSize:11, color:COLORS.gray }}>Descrição</label>
+            <input value={editForm.desc} onChange={(e)=>setEditForm(f=>({...f,desc:e.target.value}))}
+              style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4, marginBottom:12 }} />
+            <div style={{ display:"flex", gap:10, marginBottom:12 }}>
+              <div style={{ flex:1 }}>
+                <label style={{ fontSize:11, color:COLORS.gray }}>Data</label>
+                <input type="date" value={editForm.date} onChange={(e)=>setEditForm(f=>({...f,date:e.target.value}))}
+                  style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4 }} />
+              </div>
+              <div style={{ flex:1 }}>
+                <label style={{ fontSize:11, color:COLORS.gray }}>Valor (R$)</label>
+                <input type="number" value={editForm.amount} onChange={(e)=>setEditForm(f=>({...f,amount:e.target.value}))}
+                  style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4 }} />
+              </div>
+            </div>
+            <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:COLORS.gray, marginBottom: editForm.recurring?8:16, cursor:"pointer" }}>
+              <input type="checkbox" checked={editForm.recurring} onChange={(e)=>setEditForm(f=>({...f,recurring:e.target.checked}))} />
+              Repetir todo mês (lançamento fixo)
+            </label>
+            {editForm.recurring && (
+              <div style={{ marginBottom:16 }}>
+                <label style={{ fontSize:11, color:COLORS.gray }}>Repetir por quantos meses (a partir da data acima)</label>
+                <input type="number" value={editForm.repeatMonths} onChange={(e)=>setEditForm(f=>({...f,repeatMonths:e.target.value}))}
+                  style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4 }} />
+              </div>
+            )}
+            <button className="at-btn oswald" onClick={saveEditedTransaction} style={{ width:"100%", background:theme.accent2, color:"#fff", padding:"12px 0", borderRadius:6, fontSize:13, fontWeight:600 }}>
+              Salvar alterações
             </button>
           </div>
         </div>
