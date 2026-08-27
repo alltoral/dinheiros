@@ -91,6 +91,12 @@
   window.__db = firebase.firestore();
   window.__auth = firebase.auth();
   window.__googleProvider = new firebase.auth.GoogleAuthProvider();
+
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch((e) => console.error("SW falhou:", e));
+    });
+  }
 </script>
 
 <script type="text/babel" data-presets="react">
