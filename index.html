@@ -108,8 +108,10 @@
     padding:10px 12px; font-family:monospace; font-size:11px; line-height:1.5; white-space:pre-wrap;
   }
   #larotDebugPanel.show{ display:block; }
+  /* Sem override de tamanho/posição do mic no mobile: o FAB rosa ("+") também
+     não tem — os dois ficam sempre no mesmo tamanho (58px) e alinhados no
+     mesmo "right", só um em cima do outro. */
   @media (max-width:640px){
-    #larotMicBtn{ right:14px; bottom:calc(86px + env(safe-area-inset-bottom)); width:52px; height:52px; }
     #larotToast{ right:14px; bottom:calc(144px + env(safe-area-inset-bottom)); max-width:calc(100vw - 28px); }
   }
 </style>
@@ -315,8 +317,9 @@ function larotStripSpans(text, spans){
 const LAROT_DESC_STOPWORDS = new Set([
   "adicionar","adiciona","criar","cria","lancar","lanca","registrar","registra",
   "colocar","coloca","anotar","anota","bota","por","poe","entrada","saida",
-  "parcelamento","parcelado","parcelada","de","do","da","um","uma","no","na",
-  "valor","reais","real","vezes","meses","mes"
+  "parcelamento","parcelado","parcelada","recorrente","fixo","fixa","todo","toda",
+  "de","do","da","um","uma","no","na","dia","mes","meses","vez","vezes",
+  "valor","reais","real","brl"
 ]);
 function larotCleanDesc(text){
   const trimmed = text.replace(/^[\s,;:.!?\-–—]+|[\s,;:.!?\-–—]+$/g, "");
@@ -364,6 +367,40 @@ function larotParseParcelamento(clean, lower){
   const rest = larotStripSpans(clean, spans);
   const desc = larotCleanDesc(rest) || "Parcelamento";
   return { amount, count, desc };
+}
+
+/* "todo dia 5" / "todo mês dia 5, recorrente" — lançamento fixo mensal.
+   Sem "por N meses" falado, repete pelos mesmos 12 meses padrão que o
+   formulário já usa. */
+const LAROT_RECURRING_TRIGGER_RE = /\brecorrente\b|\bfix[oa]\b/;
+const LAROT_RECURRING_DAY_RE = /\btodo\s+(?:o\s+)?(?:mes\s+)?dia\s+(\d{1,2})\b/;
+const LAROT_RECURRING_MONTHS_RE = /\bpor\s+(\d+)\s*mes(?:es)?\b/;
+function larotParseRecurring(clean, lower){
+  const dayMatch = lower.match(LAROT_RECURRING_DAY_RE);
+  if(!dayMatch) return null;
+  const em = lower.match(/\bentrada\b/);
+  const sm = lower.match(/\bsaida\b/);
+  if(!em && !sm) return null;
+  const type = (em && (!sm || em.index < sm.index)) ? "entrada" : "saida";
+  const triggerMatch = type === "entrada" ? em : sm;
+  const mm = clean.match(LAROT_MONEY_RE);
+  if(!mm) return { error:true };
+  const amount = larotParseAmount(mm[0]);
+  if(amount === null || amount <= 0) return { error:true };
+  const monthsMatch = lower.match(LAROT_RECURRING_MONTHS_RE);
+  const repeatMonths = monthsMatch ? parseInt(monthsMatch[1],10) : 12;
+  const spans = [
+    { start: triggerMatch.index, end: triggerMatch.index + triggerMatch[0].length },
+    { start: dayMatch.index, end: dayMatch.index + dayMatch[0].length },
+    { start: mm.index, end: mm.index + mm[0].length },
+  ];
+  const rm = lower.match(LAROT_RECURRING_TRIGGER_RE);
+  if(rm) spans.push({ start: rm.index, end: rm.index + rm[0].length });
+  if(monthsMatch) spans.push({ start: monthsMatch.index, end: monthsMatch.index + monthsMatch[0].length });
+  const rest = larotStripSpans(clean, spans);
+  const desc = larotCleanDesc(rest) || (type === "entrada" ? "Entrada fixa" : "Saída fixa");
+  const day = parseInt(dayMatch[1], 10);
+  return { type, amount, desc, day, repeatMonths };
 }
 
 function larotAddDaysDate(date, n){ const d = new Date(date.getTime()); d.setDate(d.getDate()+n); return d; }
@@ -436,12 +473,23 @@ function larotHandleBalanceQuery(clean, transactions, initialBalance){
 const LAROT_BALANCE_QUERY_RE = /\bquanto\b/;
 function larotDispatch(transcript, ctx){
   if(!transcript || !transcript.trim()) return { ok:false, message:"Não ouvi nada." };
-  const clean = transcript.replace(/^[\s,;:.!?\-–—]+/, "").replace(/[\s,;:.!?\-–—]+$/, "");
+  let clean = transcript.replace(/^[\s,;:.!?\-–—]+/, "").replace(/[\s,;:.!?\-–—]+$/, "");
+  // o reconhecimento de voz às vezes transcreve valores em dinheiro com o
+  // código "BRL" na frente (em vez de "R$") — isso não é parte nem do
+  // valor nem da descrição, então tira antes de qualquer outra coisa.
+  clean = clean.replace(/\bBRL\b/gi, "").replace(/R\$/gi, "").replace(/\s{2,}/g, " ").trim();
   if(!clean) return { ok:false, message:"Não ouvi nada." };
   const lower = larotNormalize(clean);
 
   if(LAROT_BALANCE_QUERY_RE.test(lower)){
     return larotHandleBalanceQuery(clean, ctx.transactions, ctx.initialBalance);
+  }
+
+  const recurring = larotParseRecurring(clean, lower);
+  if(recurring){
+    if(recurring.error) return { ok:false, message:"Não entendi o valor do lançamento fixo." };
+    ctx.addRecurring(recurring.type, recurring.amount, recurring.desc, recurring.day, recurring.repeatMonths);
+    return { ok:true, message: (recurring.type === "entrada" ? "+ " : "− ") + fmtMoney(recurring.amount) + " todo dia " + recurring.day + " — " + recurring.desc + " (fixo, " + recurring.repeatMonths + " meses)" };
   }
 
   if(LAROT_PARCEL_RE.test(lower)){
@@ -460,7 +508,7 @@ function larotDispatch(transcript, ctx){
     return { ok:true, message: (entry.type === "entrada" ? "+ " : "− ") + fmtMoney(entry.amount) + " — " + entry.desc };
   }
 
-  return { ok:false, message:'Não entendi. Fala "entrada de [valor] [descrição]", "saída de...", "parcelamento de [valor] por [N] meses", ou "quanto vou ter em [data]".' };
+  return { ok:false, message:'Não entendi. Fala "entrada/saída de [valor] [descrição]", "saída recorrente de [valor] todo dia [N] [descrição]", "parcelamento de [valor] por [N] meses", ou "quanto vou ter em [data]".' };
 }
 
 function App(){
@@ -674,6 +722,15 @@ function App(){
     setTransactions(newTx);
     persist(newTx, initialBalance);
   }
+  function larotAddRecurring(type, amount, desc, day, repeatMonths){
+    const today = new Date(); today.setHours(0,0,0,0);
+    let d = new Date(today.getFullYear(), today.getMonth(), day);
+    if(d < today) d = new Date(today.getFullYear(), today.getMonth()+1, day);
+    const dateISO = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    const newTx = [...transactions, { id: uid(), date: dateISO, desc, type, amount, recurring:true, repeatMonths }];
+    setTransactions(newTx);
+    persist(newTx, initialBalance);
+  }
 
   // Reexpõe o bridge a cada mudança de estado, pra o Larot sempre enxergar
   // os lançamentos e o saldo mais recentes (sem isso, um "quanto vou ter"
@@ -686,6 +743,7 @@ function App(){
         transactions, initialBalance,
         addSimple: larotAddSimple,
         addParcelamento: larotAddParcelamento,
+        addRecurring: larotAddRecurring,
       }),
     };
     const micBtn = document.getElementById("larotMicBtn");
