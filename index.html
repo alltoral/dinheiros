@@ -467,7 +467,45 @@ function larotHandleBalanceQuery(clean, transactions, initialBalance){
   const targetISO = larotExtractDate(clean) || today;
   const balance = larotBalanceAt(transactions, initialBalance, targetISO);
   const label = targetISO === today ? "hoje" : targetISO.split("-").reverse().join("/");
-  return { ok:true, message: "Em " + label + " você deve ter " + fmtMoney(balance) + ".", speak:true };
+  const signWord = balance < 0 ? "negativo" : "positivo";
+  return { ok:true, message: "Em " + label + " seu saldo vai estar " + signWord + ": " + fmtMoney(balance) + ".", speak:true };
+}
+
+/* "quando meu saldo volta a ficar positivo" / "vai ficar negativo até quando"
+   — as duas formas de perguntar a mesma coisa: a partir de quando o saldo
+   projetado deixa de ficar negativo. Anda pela mesma expandTransactions()
+   já ordenada, dia a dia, até achar a primeira virada pro positivo. */
+function larotFindPositiveDate(transactions, initialBalance){
+  const expanded = expandTransactions(transactions);
+  const today = todayISO();
+  let running = initialBalance;
+  let i = 0;
+  while(i < expanded.length && expanded[i].date <= today){
+    running += expanded[i].type === "entrada" ? expanded[i].amount : -expanded[i].amount;
+    i++;
+  }
+  if(running >= 0) return { already:true, balance: running };
+  for(; i<expanded.length; i++){
+    running += expanded[i].type === "entrada" ? expanded[i].amount : -expanded[i].amount;
+    if(running >= 0) return { date: expanded[i].date, balance: running };
+  }
+  return null;
+}
+function larotHandleRecoveryQuery(transactions, initialBalance){
+  const result = larotFindPositiveDate(transactions, initialBalance);
+  if(!result){
+    return { ok:true, message:"Com os lançamentos que você tem cadastrados, não consigo ver seu saldo voltando a ficar positivo — talvez falte cadastrar entradas futuras.", speak:true };
+  }
+  if(result.already){
+    return { ok:true, message:"Seu saldo já está positivo: " + fmtMoney(result.balance) + ".", speak:true };
+  }
+  const dateLabel = result.date.split("-").reverse().join("/");
+  return { ok:true, message:"Seu saldo volta a ficar positivo em " + dateLabel + ", quando chega a " + fmtMoney(result.balance) + ".", speak:true };
+}
+const LAROT_SIGN_WORD_RE = /\b(positivo|negativo)\b/;
+const LAROT_RECOVERY_HINT_RE = /\bquando\b/;
+function larotIsRecoveryQuery(lower){
+  return LAROT_SIGN_WORD_RE.test(lower) && LAROT_RECOVERY_HINT_RE.test(lower);
 }
 
 const LAROT_BALANCE_QUERY_RE = /\bquanto\b/;
@@ -480,6 +518,10 @@ function larotDispatch(transcript, ctx){
   clean = clean.replace(/\bBRL\b/gi, "").replace(/R\$/gi, "").replace(/\s{2,}/g, " ").trim();
   if(!clean) return { ok:false, message:"Não ouvi nada." };
   const lower = larotNormalize(clean);
+
+  if(larotIsRecoveryQuery(lower)){
+    return larotHandleRecoveryQuery(ctx.transactions, ctx.initialBalance);
+  }
 
   if(LAROT_BALANCE_QUERY_RE.test(lower)){
     return larotHandleBalanceQuery(clean, ctx.transactions, ctx.initialBalance);
