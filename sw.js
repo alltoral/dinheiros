@@ -1,4 +1,4 @@
-const CACHE_NAME = "dinheiros-v1";
+const CACHE_NAME = "dinheiros-v2";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -6,6 +6,8 @@ const APP_SHELL = [
   "./icon-192.png",
   "./icon-512.png",
   "./apple-touch-icon.png",
+  "./larot-avatar.png",
+  "./larot-avatar-muted.png",
 ];
 
 self.addEventListener("install", (event) => {
