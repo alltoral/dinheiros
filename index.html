@@ -414,6 +414,12 @@ function larotExtractDate(text){
   if(lower.match(/\bamanha\b/)) return larotToISODate(larotAddDaysDate(today,1));
   if(lower.match(/\bhoje\b/)) return larotToISODate(today);
 
+  // "mês que vem" — resolve pro ÚLTIMO dia do mês seguinte (visão mais
+  // completa de "até lá, já vou estar positivo?" do que só o dia 1º).
+  if(lower.match(/\b(mes que vem|proximo mes|mes seguinte)\b/)){
+    return larotToISODate(new Date(today.getFullYear(), today.getMonth()+2, 0));
+  }
+
   m = lower.match(/\b(?:em|daqui a)\s+(\d{1,2})\s+dias?\b/);
   if(m) return larotToISODate(larotAddDaysDate(today, parseInt(m[1],10)));
 
@@ -508,6 +514,23 @@ function larotIsRecoveryQuery(lower){
   return LAROT_SIGN_WORD_RE.test(lower) && LAROT_RECOVERY_HINT_RE.test(lower);
 }
 
+/* "quanto eu preciso pra sair do vermelho" / "quanto falta pra ficar
+   positivo no mês que vem" — quanto FALTA (a mais, além do que já está
+   programado) pra zerar o saldo projetado numa data (hoje, se não falar
+   nenhuma). É só o valor absoluto do saldo projetado quando ele é negativo. */
+const LAROT_DEFICIT_QUERY_RE = /\bquanto\b.*\b(preciso|falta)\b/;
+function larotHandleDeficitQuery(clean, transactions, initialBalance){
+  const today = todayISO();
+  const targetISO = larotExtractDate(clean) || today;
+  const balance = larotBalanceAt(transactions, initialBalance, targetISO);
+  const label = targetISO === today ? "hoje" : targetISO.split("-").reverse().join("/");
+  if(balance >= 0){
+    return { ok:true, message: "Você já fica positivo " + (targetISO===today?"hoje":"até "+label) + " — não precisa de nada a mais (" + fmtMoney(balance) + ").", speak:true };
+  }
+  const need = Math.abs(balance);
+  return { ok:true, message: "Você precisa de mais " + fmtMoney(need) + " pra sair do vermelho até " + label + ".", speak:true };
+}
+
 const LAROT_BALANCE_QUERY_RE = /\bquanto\b/;
 function larotDispatch(transcript, ctx){
   if(!transcript || !transcript.trim()) return { ok:false, message:"Não ouvi nada." };
@@ -518,6 +541,10 @@ function larotDispatch(transcript, ctx){
   clean = clean.replace(/\bBRL\b/gi, "").replace(/R\$/gi, "").replace(/\s{2,}/g, " ").trim();
   if(!clean) return { ok:false, message:"Não ouvi nada." };
   const lower = larotNormalize(clean);
+
+  if(LAROT_DEFICIT_QUERY_RE.test(lower)){
+    return larotHandleDeficitQuery(clean, ctx.transactions, ctx.initialBalance);
+  }
 
   if(larotIsRecoveryQuery(lower)){
     return larotHandleRecoveryQuery(ctx.transactions, ctx.initialBalance);
