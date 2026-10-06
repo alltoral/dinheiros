@@ -66,69 +66,10 @@
     .rowgrid{ grid-template-columns:56px 1fr 90px 56px; }
     .hide-mobile{ display:none !important; }
   }
-
-  /* ---------- Larot (assistente de voz) ---------- */
-  #larotMicBtn{
-    position:fixed; right:20px; bottom:calc(92px + env(safe-area-inset-bottom)); z-index:45;
-    width:58px; height:58px; border:none; background:transparent; padding:0; cursor:pointer;
-    display:flex; align-items:center; justify-content:center;
-    filter:drop-shadow(0 6px 14px rgba(0,0,0,0.45));
-    transition:transform .15s ease;
-  }
-  #larotMicBtn:hover{ transform:scale(1.06); }
-  #larotMicBtn img{ width:100%; height:100%; object-fit:contain; pointer-events:none; user-select:none; }
-  #larotMicImgActive{ display:none; }
-  #larotMicImgMuted{ display:block; filter:none; }
-  #larotMicBtn.listening #larotMicImgActive{ display:block; }
-  #larotMicBtn.listening #larotMicImgMuted{ display:none; }
-  #larotMicBtn.paused #larotMicImgActive{ display:none; }
-  #larotMicBtn.paused #larotMicImgMuted{ display:block; filter:grayscale(100%); }
-  #larotMicBtn.listening{ animation:larotPulse 1.1s ease-in-out infinite; }
-  @keyframes larotPulse{
-    0%,100%{ transform:scale(1); }
-    50%{ transform:scale(1.08); }
-  }
-  #larotToast{
-    position:fixed; right:20px; bottom:calc(156px + env(safe-area-inset-bottom)); z-index:45; max-width:280px;
-    background:var(--surface); color:var(--white); border:1px solid var(--border); border-radius:14px;
-    padding:12px 16px; font-family:'Inter',sans-serif; font-size:13.5px; line-height:1.4;
-    box-shadow:0 6px 20px rgba(0,0,0,0.5); display:none;
-  }
-  #larotToast.show{ display:block; }
-  #larotDebugToggle{
-    position:fixed; left:16px; bottom:16px; z-index:45;
-    width:34px; height:34px; border-radius:50%; border:1px solid var(--border);
-    background:var(--surface); color:var(--white); font-size:16px; cursor:pointer;
-    display:flex; align-items:center; justify-content:center; opacity:0.55;
-  }
-  #larotDebugPanel{
-    display:none; position:fixed; left:16px; bottom:58px; z-index:45;
-    width:min(360px, calc(100vw - 32px)); max-height:40vh; overflow-y:auto;
-    background:rgba(0,0,0,0.92); color:#8f8; border:1px solid var(--border); border-radius:10px;
-    padding:10px 12px; font-family:monospace; font-size:11px; line-height:1.5; white-space:pre-wrap;
-  }
-  #larotDebugPanel.show{ display:block; }
-  /* Sem override de tamanho/posição do mic no mobile: o FAB rosa ("+") também
-     não tem — os dois ficam sempre no mesmo tamanho (58px) e alinhados no
-     mesmo "right", só um em cima do outro. */
-  @media (max-width:640px){
-    #larotToast{ right:14px; bottom:calc(144px + env(safe-area-inset-bottom)); max-width:calc(100vw - 28px); }
-  }
 </style>
 </head>
 <body>
 <div id="root"></div>
-
-<!-- Larot: assistente de voz -->
-<button id="larotMicBtn" type="button" title="Falar com o Larot" aria-label="Falar com o Larot" style="display:none;">
-  <img id="larotMicImgActive" src="./larot-avatar.png" alt="" draggable="false">
-  <img id="larotMicImgMuted" src="./larot-avatar-muted.png" alt="" draggable="false">
-</button>
-<button id="larotDebugToggle" type="button" title="Depuração do Larot" aria-label="Depuração do Larot" style="display:none;">🐞</button>
-<div id="larotDebugPanel"></div>
-<div id="larotToast" role="status" aria-live="polite">
-  <div id="larotToastMsg"></div>
-</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
@@ -220,7 +161,8 @@ function expandTransactions(transactions){
     const months = t.repeatMonths || 12;
     for(let i=0;i<months;i++){
       const dt = new Date(y, m-1+i, d);
-      all.push({...t, key:`${t.id}-${i}`, date:`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`});
+      const ov = t.overrides && t.overrides[i] != null ? t.overrides[i] : null;
+      all.push({...t, key:`${t.id}-${i}`, amount: ov != null ? ov : t.amount, recurringIndex:i, overridden: ov != null, date:`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`});
     }
   });
   return all.sort((a,b)=> a.date.localeCompare(b.date) || a.key.localeCompare(b.key));
@@ -284,300 +226,6 @@ function BalanceChart({ data, colorAccent1, colorAccent2 }){
       )}
     </svg>
   );
-}
-
-/* ---------- Larot: assistente de voz ----------
-   Comandos:
-   - "entrada de 2,37 pix da Ana" / "saída de 1,50 aluguel" → lançamento único, hoje.
-   - "parcelamento de 100 por 3 meses celular novo" → parcelado (mesma lógica
-     de "adicionar" com mode=parcelado: uma parcela por mês, valor igual em todas).
-   - "quanto vou ter dia 20" / "quanto vou ter essa semana"... (com ou sem data
-     — sem data, é "quanto tenho hoje") → lê o saldo projetado pra aquela data,
-     reaproveitando a mesma expandTransactions()+soma corrida que o app usa. */
-function larotNormalize(text){
-  return text.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
-}
-function larotParseAmount(raw){
-  let s = raw.trim().replace(/r\$\s*/i, "");
-  if(s.indexOf(".") !== -1 && s.indexOf(",") !== -1){
-    s = s.replace(/\./g, "").replace(",", ".");
-  } else {
-    s = s.replace(",", ".");
-  }
-  const n = parseFloat(s);
-  return isNaN(n) ? null : n;
-}
-const LAROT_MONEY_RE = /(\d+(?:[.,]\d+)*)/;
-function larotStripSpans(text, spans){
-  const sorted = spans.slice().sort((a,b)=> b.start-a.start);
-  let result = text;
-  sorted.forEach((sp)=>{ result = result.slice(0,sp.start) + " " + result.slice(sp.end); });
-  return result.replace(/\s{2,}/g, " ").trim();
-}
-const LAROT_DESC_STOPWORDS = new Set([
-  "adicionar","adiciona","criar","cria","lancar","lanca","registrar","registra",
-  "colocar","coloca","anotar","anota","bota","por","poe","entrada","saida",
-  "parcelamento","parcelado","parcelada","recorrente","fixo","fixa","todo","toda",
-  "de","do","da","um","uma","no","na","dia","mes","meses","vez","vezes",
-  "valor","reais","real","brl"
-]);
-function larotCleanDesc(text){
-  const trimmed = text.replace(/^[\s,;:.!?\-–—]+|[\s,;:.!?\-–—]+$/g, "");
-  const words = trimmed.split(/\s+/).filter(Boolean);
-  let i = 0;
-  while(i < words.length && (LAROT_DESC_STOPWORDS.has(larotNormalize(words[i])) || /^[,.\-:;]+$/.test(words[i]))) i++;
-  const cleaned = words.slice(i).join(" ").trim();
-  if(!cleaned) return "";
-  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
-}
-
-function larotParseEntrySaida(clean, lower){
-  const em = lower.match(/\bentrada\b/);
-  const sm = lower.match(/\bsaida\b/);
-  if(!em && !sm) return null;
-  const type = (em && (!sm || em.index < sm.index)) ? "entrada" : "saida";
-  const triggerMatch = type === "entrada" ? em : sm;
-  const mm = clean.match(LAROT_MONEY_RE);
-  if(!mm) return null;
-  const amount = larotParseAmount(mm[0]);
-  if(amount === null || amount <= 0) return null;
-  const rest = larotStripSpans(clean, [
-    { start: triggerMatch.index, end: triggerMatch.index + triggerMatch[0].length },
-    { start: mm.index, end: mm.index + mm[0].length },
-  ]);
-  const desc = larotCleanDesc(rest);
-  return { type, amount, desc: desc || (type === "entrada" ? "Entrada" : "Saída") };
-}
-
-const LAROT_PARCEL_RE = /\bparcelamento\b|\bparcelad[oa]\b/;
-const LAROT_PARCEL_MONTHS_RE = /\bpor\s+(\d+)\s*mes(?:es)?\b|\bem\s+(\d+)\s*(?:x|vezes)\b|\b(\d+)\s*x\b|\b(\d+)\s*mes(?:es)?\b/;
-function larotParseParcelamento(clean, lower){
-  if(!LAROT_PARCEL_RE.test(lower)) return null;
-  const mm = clean.match(LAROT_MONEY_RE);
-  if(!mm) return { error:true, reason:"valor" };
-  const amount = larotParseAmount(mm[0]);
-  if(amount === null || amount <= 0) return { error:true, reason:"valor" };
-  const monthsMatch = lower.match(LAROT_PARCEL_MONTHS_RE);
-  const count = monthsMatch ? parseInt(monthsMatch[1]||monthsMatch[2]||monthsMatch[3]||monthsMatch[4], 10) : null;
-  if(!count || count < 2) return { error:true, reason:"meses" };
-  const pm = lower.match(LAROT_PARCEL_RE);
-  const spans = [{ start: mm.index, end: mm.index + mm[0].length }];
-  if(pm) spans.push({ start: pm.index, end: pm.index + pm[0].length });
-  if(monthsMatch) spans.push({ start: monthsMatch.index, end: monthsMatch.index + monthsMatch[0].length });
-  const rest = larotStripSpans(clean, spans);
-  const desc = larotCleanDesc(rest) || "Parcelamento";
-  return { amount, count, desc };
-}
-
-/* "todo dia 5" / "todo mês dia 5, recorrente" — lançamento fixo mensal.
-   Sem "por N meses" falado, repete pelos mesmos 12 meses padrão que o
-   formulário já usa. */
-const LAROT_RECURRING_TRIGGER_RE = /\brecorrente\b|\bfix[oa]\b/;
-const LAROT_RECURRING_DAY_RE = /\btodo\s+(?:o\s+)?(?:mes\s+)?dia\s+(\d{1,2})\b/;
-const LAROT_RECURRING_MONTHS_RE = /\bpor\s+(\d+)\s*mes(?:es)?\b/;
-function larotParseRecurring(clean, lower){
-  const dayMatch = lower.match(LAROT_RECURRING_DAY_RE);
-  if(!dayMatch) return null;
-  const em = lower.match(/\bentrada\b/);
-  const sm = lower.match(/\bsaida\b/);
-  if(!em && !sm) return null;
-  const type = (em && (!sm || em.index < sm.index)) ? "entrada" : "saida";
-  const triggerMatch = type === "entrada" ? em : sm;
-  const mm = clean.match(LAROT_MONEY_RE);
-  if(!mm) return { error:true };
-  const amount = larotParseAmount(mm[0]);
-  if(amount === null || amount <= 0) return { error:true };
-  const monthsMatch = lower.match(LAROT_RECURRING_MONTHS_RE);
-  const repeatMonths = monthsMatch ? parseInt(monthsMatch[1],10) : 12;
-  const spans = [
-    { start: triggerMatch.index, end: triggerMatch.index + triggerMatch[0].length },
-    { start: dayMatch.index, end: dayMatch.index + dayMatch[0].length },
-    { start: mm.index, end: mm.index + mm[0].length },
-  ];
-  const rm = lower.match(LAROT_RECURRING_TRIGGER_RE);
-  if(rm) spans.push({ start: rm.index, end: rm.index + rm[0].length });
-  if(monthsMatch) spans.push({ start: monthsMatch.index, end: monthsMatch.index + monthsMatch[0].length });
-  const rest = larotStripSpans(clean, spans);
-  const desc = larotCleanDesc(rest) || (type === "entrada" ? "Entrada fixa" : "Saída fixa");
-  const day = parseInt(dayMatch[1], 10);
-  return { type, amount, desc, day, repeatMonths };
-}
-
-function larotAddDaysDate(date, n){ const d = new Date(date.getTime()); d.setDate(d.getDate()+n); return d; }
-function larotToISODate(date){ const d = new Date(date.getTime()); d.setHours(0,0,0,0); return d.toISOString().slice(0,10); }
-function larotExtractDate(text){
-  const lower = larotNormalize(text);
-  const today = new Date(); today.setHours(0,0,0,0);
-  let m;
-
-  if(lower.match(/depois de amanha/)) return larotToISODate(larotAddDaysDate(today,2));
-  if(lower.match(/\bamanha\b/)) return larotToISODate(larotAddDaysDate(today,1));
-  if(lower.match(/\bhoje\b/)) return larotToISODate(today);
-
-  // "mês que vem" — resolve pro ÚLTIMO dia do mês seguinte (visão mais
-  // completa de "até lá, já vou estar positivo?" do que só o dia 1º).
-  if(lower.match(/\b(mes que vem|proximo mes|mes seguinte)\b/)){
-    return larotToISODate(new Date(today.getFullYear(), today.getMonth()+2, 0));
-  }
-
-  m = lower.match(/\b(?:em|daqui a)\s+(\d{1,2})\s+dias?\b/);
-  if(m) return larotToISODate(larotAddDaysDate(today, parseInt(m[1],10)));
-
-  m = text.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
-  if(m){
-    const dd = parseInt(m[1],10), mo = parseInt(m[2],10)-1;
-    const yyyy = m[3] ? (m[3].length===2 ? 2000+parseInt(m[3],10) : parseInt(m[3],10)) : today.getFullYear();
-    return larotToISODate(new Date(yyyy,mo,dd));
-  }
-
-  const MONTHS_PT = ["janeiro","fevereiro","marco","abril","maio","junho","julho","agosto","setembro","outubro","novembro","dezembro"];
-  m = lower.match(new RegExp("\\b(?:dia\\s+)?(\\d{1,2})\\s+de\\s+(" + MONTHS_PT.join("|") + ")\\b"));
-  if(m){
-    const dayM = parseInt(m[1],10), monthIdx = MONTHS_PT.indexOf(m[2]);
-    let c = new Date(today.getFullYear(), monthIdx, dayM);
-    if(c<today) c = new Date(today.getFullYear()+1, monthIdx, dayM);
-    return larotToISODate(c);
-  }
-
-  m = lower.match(/\bdia\s+(\d{1,2})\b/);
-  if(m){
-    const day = parseInt(m[1],10);
-    let c = new Date(today.getFullYear(), today.getMonth(), day);
-    if(c<today) c = new Date(today.getFullYear(), today.getMonth()+1, day);
-    return larotToISODate(c);
-  }
-
-  const WEEKDAYS = [["domingo",0],["segunda",1],["terca",2],["quarta",3],["quinta",4],["sexta",5],["sabado",6]];
-  for(let i=0;i<WEEKDAYS.length;i++){
-    m = lower.match(new RegExp("(proxima\\s+)?\\b" + WEEKDAYS[i][0] + "(-feira)?\\b"));
-    if(m){
-      let diff = (WEEKDAYS[i][1]-today.getDay()+7)%7;
-      if(diff===0) diff = 7;
-      return larotToISODate(larotAddDaysDate(today, diff));
-    }
-  }
-  return null;
-}
-
-function larotBalanceAt(transactions, initialBalance, targetISO){
-  const expanded = expandTransactions(transactions);
-  let running = initialBalance;
-  for(let i=0;i<expanded.length;i++){
-    if(expanded[i].date > targetISO) break;
-    running += expanded[i].type === "entrada" ? expanded[i].amount : -expanded[i].amount;
-  }
-  return running;
-}
-function larotHandleBalanceQuery(clean, transactions, initialBalance){
-  const today = todayISO();
-  const targetISO = larotExtractDate(clean) || today;
-  const balance = larotBalanceAt(transactions, initialBalance, targetISO);
-  const label = targetISO === today ? "hoje" : targetISO.split("-").reverse().join("/");
-  const signWord = balance < 0 ? "negativo" : "positivo";
-  return { ok:true, message: "Em " + label + " seu saldo vai estar " + signWord + ": " + fmtMoney(balance) + ".", speak:true };
-}
-
-/* "quando meu saldo volta a ficar positivo" / "vai ficar negativo até quando"
-   — as duas formas de perguntar a mesma coisa: a partir de quando o saldo
-   projetado deixa de ficar negativo. Anda pela mesma expandTransactions()
-   já ordenada, dia a dia, até achar a primeira virada pro positivo. */
-function larotFindPositiveDate(transactions, initialBalance){
-  const expanded = expandTransactions(transactions);
-  const today = todayISO();
-  let running = initialBalance;
-  let i = 0;
-  while(i < expanded.length && expanded[i].date <= today){
-    running += expanded[i].type === "entrada" ? expanded[i].amount : -expanded[i].amount;
-    i++;
-  }
-  if(running >= 0) return { already:true, balance: running };
-  for(; i<expanded.length; i++){
-    running += expanded[i].type === "entrada" ? expanded[i].amount : -expanded[i].amount;
-    if(running >= 0) return { date: expanded[i].date, balance: running };
-  }
-  return null;
-}
-function larotHandleRecoveryQuery(transactions, initialBalance){
-  const result = larotFindPositiveDate(transactions, initialBalance);
-  if(!result){
-    return { ok:true, message:"Com os lançamentos que você tem cadastrados, não consigo ver seu saldo voltando a ficar positivo — talvez falte cadastrar entradas futuras.", speak:true };
-  }
-  if(result.already){
-    return { ok:true, message:"Seu saldo já está positivo: " + fmtMoney(result.balance) + ".", speak:true };
-  }
-  const dateLabel = result.date.split("-").reverse().join("/");
-  return { ok:true, message:"Seu saldo volta a ficar positivo em " + dateLabel + ", quando chega a " + fmtMoney(result.balance) + ".", speak:true };
-}
-const LAROT_SIGN_WORD_RE = /\b(positivo|negativo)\b/;
-const LAROT_RECOVERY_HINT_RE = /\bquando\b/;
-function larotIsRecoveryQuery(lower){
-  return LAROT_SIGN_WORD_RE.test(lower) && LAROT_RECOVERY_HINT_RE.test(lower);
-}
-
-/* "quanto eu preciso pra sair do vermelho" / "quanto falta pra ficar
-   positivo no mês que vem" — quanto FALTA (a mais, além do que já está
-   programado) pra zerar o saldo projetado numa data (hoje, se não falar
-   nenhuma). É só o valor absoluto do saldo projetado quando ele é negativo. */
-const LAROT_DEFICIT_QUERY_RE = /\bquanto\b.*\b(preciso|falta)\b/;
-function larotHandleDeficitQuery(clean, transactions, initialBalance){
-  const today = todayISO();
-  const targetISO = larotExtractDate(clean) || today;
-  const balance = larotBalanceAt(transactions, initialBalance, targetISO);
-  const label = targetISO === today ? "hoje" : targetISO.split("-").reverse().join("/");
-  if(balance >= 0){
-    return { ok:true, message: "Você já fica positivo " + (targetISO===today?"hoje":"até "+label) + " — não precisa de nada a mais (" + fmtMoney(balance) + ").", speak:true };
-  }
-  const need = Math.abs(balance);
-  return { ok:true, message: "Você precisa de mais " + fmtMoney(need) + " pra sair do vermelho até " + label + ".", speak:true };
-}
-
-const LAROT_BALANCE_QUERY_RE = /\bquanto\b/;
-function larotDispatch(transcript, ctx){
-  if(!transcript || !transcript.trim()) return { ok:false, message:"Não ouvi nada." };
-  let clean = transcript.replace(/^[\s,;:.!?\-–—]+/, "").replace(/[\s,;:.!?\-–—]+$/, "");
-  // o reconhecimento de voz às vezes transcreve valores em dinheiro com o
-  // código "BRL" na frente (em vez de "R$") — isso não é parte nem do
-  // valor nem da descrição, então tira antes de qualquer outra coisa.
-  clean = clean.replace(/\bBRL\b/gi, "").replace(/R\$/gi, "").replace(/\s{2,}/g, " ").trim();
-  if(!clean) return { ok:false, message:"Não ouvi nada." };
-  const lower = larotNormalize(clean);
-
-  if(LAROT_DEFICIT_QUERY_RE.test(lower)){
-    return larotHandleDeficitQuery(clean, ctx.transactions, ctx.initialBalance);
-  }
-
-  if(larotIsRecoveryQuery(lower)){
-    return larotHandleRecoveryQuery(ctx.transactions, ctx.initialBalance);
-  }
-
-  if(LAROT_BALANCE_QUERY_RE.test(lower)){
-    return larotHandleBalanceQuery(clean, ctx.transactions, ctx.initialBalance);
-  }
-
-  const recurring = larotParseRecurring(clean, lower);
-  if(recurring){
-    if(recurring.error) return { ok:false, message:"Não entendi o valor do lançamento fixo." };
-    ctx.addRecurring(recurring.type, recurring.amount, recurring.desc, recurring.day, recurring.repeatMonths);
-    return { ok:true, message: (recurring.type === "entrada" ? "+ " : "− ") + fmtMoney(recurring.amount) + " todo dia " + recurring.day + " — " + recurring.desc + " (fixo, " + recurring.repeatMonths + " meses)" };
-  }
-
-  if(LAROT_PARCEL_RE.test(lower)){
-    const parsed = larotParseParcelamento(clean, lower);
-    if(!parsed) return { ok:false, message:"Não entendi o parcelamento." };
-    if(parsed.error === true && parsed.reason === "meses") return { ok:false, message:'Fala também por quantos meses, tipo "por 3 meses".' };
-    if(parsed.error) return { ok:false, message:"Não entendi o valor do parcelamento." };
-    const type = /\bentrada\b/.test(lower) ? "entrada" : "saida";
-    ctx.addParcelamento(type, parsed.amount, parsed.count, parsed.desc);
-    return { ok:true, message: "Parcelamento de " + fmtMoney(parsed.amount) + " em " + parsed.count + "x — " + parsed.desc };
-  }
-
-  const entry = larotParseEntrySaida(clean, lower);
-  if(entry){
-    ctx.addSimple(entry.type, entry.amount, entry.desc);
-    return { ok:true, message: (entry.type === "entrada" ? "+ " : "− ") + fmtMoney(entry.amount) + " — " + entry.desc };
-  }
-
-  return { ok:false, message:'Não entendi. Fala "entrada/saída de [valor] [descrição]", "saída recorrente de [valor] todo dia [N] [descrição]", "parcelamento de [valor] por [N] meses", ou "quanto vou ter em [data]".' };
 }
 
 function App(){
@@ -750,14 +398,32 @@ function App(){
   function openEditModal(rowT){
     const orig = transactions.find(x => x.id === rowT.id);
     if(!orig) return;
+    const isRec = !!orig.recurring;
     setEditingTxId(orig.id);
     setEditForm({
       desc: orig.desc, type: orig.type, date: orig.date, amount: orig.amount,
-      recurring: !!orig.recurring, repeatMonths: orig.repeatMonths || 12,
+      recurring: isRec, repeatMonths: orig.repeatMonths || 12,
+      isRecurringOrig: isRec, scope: isRec ? "month" : "all",
+      monthIndex: rowT.recurringIndex, monthDate: rowT.date, monthAmount: rowT.amount,
+      baseAmount: orig.amount, overridden: !!rowT.overridden,
     });
   }
   function closeEditModal(){ setEditingTxId(null); setEditForm(null); }
   function saveEditedTransaction(){
+    if(editForm.isRecurringOrig && editForm.scope === "month"){
+      const v = parseFloat(String(editForm.monthAmount).replace(",", "."));
+      if(!v || v<=0) return;
+      const newTx = transactions.map(x => {
+        if(x.id !== editingTxId) return x;
+        const ov = { ...(x.overrides || {}) };
+        if(v === x.amount) delete ov[editForm.monthIndex]; else ov[editForm.monthIndex] = v;
+        return { ...x, overrides: ov };
+      });
+      setTransactions(newTx);
+      persist(newTx, initialBalance);
+      closeEditModal();
+      return;
+    }
     const amount = parseFloat(String(editForm.amount).replace(",", "."));
     if(!editForm.desc.trim() || !amount || amount<=0 || !editForm.date) return;
     const newTx = transactions.map(x => x.id === editingTxId ? {
@@ -773,54 +439,17 @@ function App(){
     persist(newTx, initialBalance);
     closeEditModal();
   }
-
-  function larotAddSimple(type, amount, desc){
-    const newTx = [...transactions, {
-      id: uid(), date: todayISO(), desc, type, amount, recurring:false, repeatMonths:1,
-    }];
-    setTransactions(newTx);
-    persist(newTx, initialBalance);
-  }
-  function larotAddParcelamento(type, amount, count, desc){
-    const [y,m,d] = todayISO().split("-").map(Number);
-    const installments = Array.from({length:count}, (_,i) => {
-      const dt = new Date(y, m-1+i, d);
-      return { seq:i+1, date:`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`, amount };
+  function resetMonthOverride(){
+    const newTx = transactions.map(x => {
+      if(x.id !== editingTxId) return x;
+      const ov = { ...(x.overrides || {}) };
+      delete ov[editForm.monthIndex];
+      return { ...x, overrides: ov };
     });
-    const newTx = [...transactions, { id: uid(), desc, type, parcelado:true, installments }];
     setTransactions(newTx);
     persist(newTx, initialBalance);
+    closeEditModal();
   }
-  function larotAddRecurring(type, amount, desc, day, repeatMonths){
-    const today = new Date(); today.setHours(0,0,0,0);
-    let d = new Date(today.getFullYear(), today.getMonth(), day);
-    if(d < today) d = new Date(today.getFullYear(), today.getMonth()+1, day);
-    const dateISO = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-    const newTx = [...transactions, { id: uid(), date: dateISO, desc, type, amount, recurring:true, repeatMonths }];
-    setTransactions(newTx);
-    persist(newTx, initialBalance);
-  }
-
-  // Reexpõe o bridge a cada mudança de estado, pra o Larot sempre enxergar
-  // os lançamentos e o saldo mais recentes (sem isso, um "quanto vou ter"
-  // logo depois de um "entrada de..." leria dados desatualizados).
-  useEffect(() => {
-    window.LarotBridge = {
-      appId: "dinheiros",
-      isReady: () => !!user && loaded,
-      handleVoiceCommand: (transcript) => larotDispatch(transcript, {
-        transactions, initialBalance,
-        addSimple: larotAddSimple,
-        addParcelamento: larotAddParcelamento,
-        addRecurring: larotAddRecurring,
-      }),
-    };
-    const micBtn = document.getElementById("larotMicBtn");
-    const debugBtn = document.getElementById("larotDebugToggle");
-    const visible = !!user && loaded;
-    if(micBtn) micBtn.style.display = visible ? "flex" : "none";
-    if(debugBtn) debugBtn.style.display = visible ? "flex" : "none";
-  }, [transactions, initialBalance, user, loaded]);
 
   if (user === undefined) {
     return (
@@ -938,6 +567,7 @@ function App(){
               <div style={{ display:"flex", alignItems:"center", gap:6, overflow:"hidden", textOverflow:"ellipsis" }}>
                 <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{t.desc}</span>
                 {t.recurring && <IconRepeat size={12} color={COLORS.gray}/>}
+                {t.overridden && <span className="oswald" style={{ fontSize:9, color:COLORS.gray, border:`1px solid ${COLORS.border}`, borderRadius:4, padding:"1px 5px", whiteSpace:"nowrap", flexShrink:0 }}>ajustado</span>}
                 {t.parcelado && (
                   <button className="at-btn oswald" onClick={()=>setEditingParcelId(t.id)} title="Editar parcelas" style={{
                     fontSize:9, color:theme.accent3, border:`1px solid ${theme.accent3}`, borderRadius:4, padding:"1px 6px",
@@ -1044,39 +674,76 @@ function App(){
               <div className="playfair" style={{ fontSize:20, fontWeight:700 }}>Editar lançamento</div>
               <button className="at-btn" onClick={closeEditModal} style={{ background:"transparent", color:COLORS.gray }}><IconX size={18}/></button>
             </div>
-            <div style={{ display:"flex", gap:8, marginBottom:14 }}>
-              <button className="at-btn oswald" onClick={()=>setEditForm(f=>({...f,type:"entrada"}))} style={{ flex:1, padding:"10px 0", fontSize:12, borderRadius:6, background: editForm.type==="entrada"?theme.accent1:COLORS.surfaceAlt, color: editForm.type==="entrada"?"#0b0b0d":COLORS.gray }}>Entrada</button>
-              <button className="at-btn oswald" onClick={()=>setEditForm(f=>({...f,type:"saida"}))} style={{ flex:1, padding:"10px 0", fontSize:12, borderRadius:6, background: editForm.type==="saida"?theme.accent2:COLORS.surfaceAlt, color: editForm.type==="saida"?"#fff":COLORS.gray }}>Saída</button>
-            </div>
-            <label style={{ fontSize:11, color:COLORS.gray }}>Descrição</label>
-            <input value={editForm.desc} onChange={(e)=>setEditForm(f=>({...f,desc:e.target.value}))}
-              style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4, marginBottom:12 }} />
-            <div style={{ display:"flex", gap:10, marginBottom:12 }}>
-              <div style={{ flex:1 }}>
-                <label style={{ fontSize:11, color:COLORS.gray }}>Data</label>
-                <input type="date" value={editForm.date} onChange={(e)=>setEditForm(f=>({...f,date:e.target.value}))}
-                  style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4 }} />
-              </div>
-              <div style={{ flex:1 }}>
-                <label style={{ fontSize:11, color:COLORS.gray }}>Valor (R$)</label>
-                <input type="number" value={editForm.amount} onChange={(e)=>setEditForm(f=>({...f,amount:e.target.value}))}
-                  style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4 }} />
-              </div>
-            </div>
-            <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:COLORS.gray, marginBottom: editForm.recurring?8:16, cursor:"pointer" }}>
-              <input type="checkbox" checked={editForm.recurring} onChange={(e)=>setEditForm(f=>({...f,recurring:e.target.checked}))} />
-              Repetir todo mês (lançamento fixo)
-            </label>
-            {editForm.recurring && (
-              <div style={{ marginBottom:16 }}>
-                <label style={{ fontSize:11, color:COLORS.gray }}>Repetir por quantos meses (a partir da data acima)</label>
-                <input type="number" value={editForm.repeatMonths} onChange={(e)=>setEditForm(f=>({...f,repeatMonths:e.target.value}))}
-                  style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4 }} />
+
+            {editForm.isRecurringOrig && (
+              <div style={{ display:"flex", gap:6, marginBottom:16 }}>
+                <button className="at-btn oswald" onClick={()=>setEditForm(f=>({...f,scope:"month"}))} style={{ flex:1, padding:"9px 0", fontSize:10, borderRadius:6, background: editForm.scope==="month"?COLORS.white:COLORS.surfaceAlt, color: editForm.scope==="month"?"#0b0b0d":COLORS.gray }}>Só este mês</button>
+                <button className="at-btn oswald" onClick={()=>setEditForm(f=>({...f,scope:"all"}))} style={{ flex:1, padding:"9px 0", fontSize:10, borderRadius:6, background: editForm.scope==="all"?COLORS.white:COLORS.surfaceAlt, color: editForm.scope==="all"?"#0b0b0d":COLORS.gray }}>Todos os meses</button>
               </div>
             )}
-            <button className="at-btn oswald" onClick={saveEditedTransaction} style={{ width:"100%", background:theme.accent2, color:"#fff", padding:"12px 0", borderRadius:6, fontSize:13, fontWeight:600 }}>
-              Salvar alterações
-            </button>
+
+            {editForm.isRecurringOrig && editForm.scope==="month" ? (
+              <>
+                <div style={{ fontSize:12, color:COLORS.gray, marginBottom:14 }}>
+                  {editForm.desc} · {editForm.monthDate.split("-").reverse().join("/")}
+                </div>
+                <label style={{ fontSize:11, color:COLORS.gray }}>Valor deste mês (R$)</label>
+                <input type="number" value={editForm.monthAmount} onChange={(e)=>setEditForm(f=>({...f,monthAmount:e.target.value}))}
+                  style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4, marginBottom:8 }} />
+                <div style={{ fontSize:11, color:COLORS.gray, marginBottom:16 }}>
+                  Os outros meses continuam com o valor padrão de {fmtMoney(editForm.baseAmount)}.
+                </div>
+                {editForm.overridden && (
+                  <button className="at-btn oswald" onClick={resetMonthOverride} style={{ width:"100%", background:"transparent", border:`1px solid ${COLORS.border}`, color:COLORS.gray, padding:"10px 0", borderRadius:6, fontSize:11, marginBottom:10 }}>
+                    Voltar ao valor padrão
+                  </button>
+                )}
+                <button className="at-btn oswald" onClick={saveEditedTransaction} style={{ width:"100%", background:theme.accent2, color:"#fff", padding:"12px 0", borderRadius:6, fontSize:13, fontWeight:600 }}>
+                  Salvar este mês
+                </button>
+              </>
+            ) : (
+              <>
+                <div style={{ display:"flex", gap:8, marginBottom:14 }}>
+                  <button className="at-btn oswald" onClick={()=>setEditForm(f=>({...f,type:"entrada"}))} style={{ flex:1, padding:"10px 0", fontSize:12, borderRadius:6, background: editForm.type==="entrada"?theme.accent1:COLORS.surfaceAlt, color: editForm.type==="entrada"?"#0b0b0d":COLORS.gray }}>Entrada</button>
+                  <button className="at-btn oswald" onClick={()=>setEditForm(f=>({...f,type:"saida"}))} style={{ flex:1, padding:"10px 0", fontSize:12, borderRadius:6, background: editForm.type==="saida"?theme.accent2:COLORS.surfaceAlt, color: editForm.type==="saida"?"#fff":COLORS.gray }}>Saída</button>
+                </div>
+                <label style={{ fontSize:11, color:COLORS.gray }}>Descrição</label>
+                <input value={editForm.desc} onChange={(e)=>setEditForm(f=>({...f,desc:e.target.value}))}
+                  style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4, marginBottom:12 }} />
+                <div style={{ display:"flex", gap:10, marginBottom:12 }}>
+                  <div style={{ flex:1 }}>
+                    <label style={{ fontSize:11, color:COLORS.gray }}>Data</label>
+                    <input type="date" value={editForm.date} onChange={(e)=>setEditForm(f=>({...f,date:e.target.value}))}
+                      style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4 }} />
+                  </div>
+                  <div style={{ flex:1 }}>
+                    <label style={{ fontSize:11, color:COLORS.gray }}>Valor padrão (R$)</label>
+                    <input type="number" value={editForm.amount} onChange={(e)=>setEditForm(f=>({...f,amount:e.target.value}))}
+                      style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4 }} />
+                  </div>
+                </div>
+                <label style={{ display:"flex", alignItems:"center", gap:8, fontSize:12, color:COLORS.gray, marginBottom: editForm.recurring?8:16, cursor:"pointer" }}>
+                  <input type="checkbox" checked={editForm.recurring} onChange={(e)=>setEditForm(f=>({...f,recurring:e.target.checked}))} />
+                  Repetir todo mês (lançamento fixo)
+                </label>
+                {editForm.recurring && (
+                  <div style={{ marginBottom:16 }}>
+                    <label style={{ fontSize:11, color:COLORS.gray }}>Repetir por quantos meses (a partir da data acima)</label>
+                    <input type="number" value={editForm.repeatMonths} onChange={(e)=>setEditForm(f=>({...f,repeatMonths:e.target.value}))}
+                      style={{ width:"100%", background:COLORS.surfaceAlt, border:`1px solid ${COLORS.border}`, borderRadius:6, padding:"10px 12px", color:COLORS.white, marginTop:4 }} />
+                    {editForm.isRecurringOrig && (
+                      <div style={{ fontSize:11, color:COLORS.gray, marginTop:8 }}>
+                        Meses que você ajustou individualmente mantêm o valor deles.
+                      </div>
+                    )}
+                  </div>
+                )}
+                <button className="at-btn oswald" onClick={saveEditedTransaction} style={{ width:"100%", background:theme.accent2, color:"#fff", padding:"12px 0", borderRadius:6, fontSize:13, fontWeight:600 }}>
+                  Salvar alterações
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -1175,198 +842,6 @@ function App(){
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
-</script>
-
-<script>
-(function(){
-  "use strict";
-
-  var micBtn = document.getElementById("larotMicBtn");
-  var toastEl = document.getElementById("larotToast");
-  if(!micBtn || !toastEl) return;
-
-  var SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if(!SpeechRecognitionImpl) return; // navegador sem suporte a voz: botão fica escondido
-
-  var recognition = new SpeechRecognitionImpl();
-  recognition.lang = "pt-BR";
-  recognition.maxAlternatives = 1;
-  recognition.continuous = true;     // não finaliza sozinho na primeira pausa curta
-  recognition.interimResults = true; // pra mostrar o que está entendendo em tempo real
-
-  var SILENCE_MS = 1600; // quanto tempo de silêncio de verdade até considerar que você terminou
-
-  var toastTimer = null;
-  var silenceTimer = null;
-  var listening = false;  // true = capturando sua fala agora
-  var finalChunks = "";   // texto final acumulado durante a captação atual
-
-  /* Painel de depuração visível na tela — pra ver o que está acontecendo
-     direto no celular (print da tela), sem precisar de ferramenta nenhuma
-     conectada no computador. */
-  var debugToggleBtn = document.getElementById("larotDebugToggle");
-  var debugPanelEl = document.getElementById("larotDebugPanel");
-  var debugLines = [];
-  function larotLog(msg){
-    console.log("[Larot]", msg);
-    debugLines.push(new Date().toLocaleTimeString() + " — " + msg);
-    if(debugLines.length > 40) debugLines.shift();
-    if(debugPanelEl){
-      debugPanelEl.textContent = debugLines.join("\n");
-      debugPanelEl.scrollTop = debugPanelEl.scrollHeight;
-    }
-  }
-  if(debugToggleBtn && debugPanelEl){
-    debugToggleBtn.addEventListener("click", function(){
-      debugPanelEl.classList.toggle("show");
-    });
-  }
-
-  var toastMsgEl = document.getElementById("larotToastMsg");
-
-  function showToast(text, ms){
-    toastMsgEl.textContent = text;
-    toastEl.classList.add("show");
-    if(toastTimer) clearTimeout(toastTimer);
-    if(ms !== 0){
-      toastTimer = setTimeout(function(){ toastEl.classList.remove("show"); }, ms || 5000);
-    }
-  }
-
-  /* Só fala em voz alta as respostas marcadas com "speak" (a consulta de
-     saldo projetado) — o resto fica só no texto, pra emendar comandos rápido. */
-  var preferredVoice = null;
-  var MALE_VOICE_HINT_RE = /male|masculin|homem|\b(daniel|ricardo|thiago|felipe|rafael|gustavo|f[aá]bio|rodrigo|bruno|marcos|paulo|jos[eé]|jo[aã]o|carlos|ant[oô]nio|pedro|fernando|eduardo|hugo|diego|leonardo|luiz|luís|miguel|davi|gabriel|lucas|matheus|andr[eé])\b/i;
-  function pickVoice(){
-    if(!("speechSynthesis" in window)) return;
-    var voices = window.speechSynthesis.getVoices();
-    var ptVoices = voices.filter(function(v){ return /^pt/i.test(v.lang); });
-    var male = ptVoices.find(function(v){ return MALE_VOICE_HINT_RE.test(v.name); });
-    preferredVoice = male || ptVoices[0] || null;
-  }
-  if("speechSynthesis" in window){
-    pickVoice();
-    window.speechSynthesis.onvoiceschanged = pickVoice;
-  }
-  function speak(text){
-    if(!("speechSynthesis" in window)) return;
-    try{
-      var utter = new SpeechSynthesisUtterance(text);
-      utter.lang = "pt-BR";
-      if(preferredVoice) utter.voice = preferredVoice;
-      utter.pitch = 0.6;
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(utter);
-    }catch(e){}
-  }
-
-  function setListening(v){
-    listening = v;
-    micBtn.classList.toggle("listening", v);
-  }
-
-  function handleTranscript(transcript){
-    larotLog("processando: " + JSON.stringify(transcript));
-    var bridge = window.LarotBridge;
-    if(!bridge || typeof bridge.handleVoiceCommand !== "function"){
-      larotLog("LarotBridge indisponível");
-      showToast("Larot não está disponível neste app ainda.");
-      return;
-    }
-    Promise.resolve(bridge.handleVoiceCommand(transcript)).then(function(result){
-      larotLog("resultado: " + JSON.stringify(result));
-      var msg = (result && result.message) || (result && result.ok ? "Feito." : "Não consegui fazer isso.");
-      showToast(msg);
-      if(result && result.speak) speak(msg);
-    });
-  }
-
-  /* Enquanto você fala, continuamos ouvindo até SILENCE_MS de silêncio de
-     verdade (em vez de cortar na primeira pausa curta). Pra montar o texto,
-     usamos sempre o ÚLTIMO resultado recebido como "tudo que você falou
-     até agora" — em vez de somar vários trechos, o que em alguns celulares
-     causava texto duplicado/repetido. */
-  function handleResultEvent(e){
-    var lastIdx = e.results.length - 1;
-    if(lastIdx >= 0) finalChunks = e.results[lastIdx][0].transcript;
-    larotLog("resultado #" + e.results.length + (e.results[lastIdx] && e.results[lastIdx].isFinal ? " (final)" : " (interino)") + ": " + JSON.stringify(finalChunks));
-    if(finalChunks) showToast("Ouvindo: “" + finalChunks + "”", 0);
-
-    if(silenceTimer) clearTimeout(silenceTimer);
-    silenceTimer = setTimeout(function(){
-      larotLog("silêncio detectado, finalizando");
-      finishListening();
-    }, SILENCE_MS);
-  }
-  recognition.addEventListener("result", handleResultEvent);
-
-  function processAndReset(){
-    if(silenceTimer){ clearTimeout(silenceTimer); silenceTimer = null; }
-    var transcript = finalChunks.trim();
-    finalChunks = "";
-    setListening(false);
-    if(transcript) handleTranscript(transcript);
-    else larotLog("nada pra processar (texto vazio)");
-  }
-
-  function finishListening(){
-    if(!listening){ larotLog("finishListening chamado mas já não estava ouvindo"); return; }
-    processAndReset();
-    try{ recognition.stop(); }catch(e){ larotLog("erro ao chamar stop(): " + e); }
-  }
-
-  recognition.addEventListener("end", function(){
-    larotLog("evento nativo 'end' disparou (listening=" + listening + ")");
-    if(listening) processAndReset();
-  });
-
-  recognition.addEventListener("error", function(e){
-    larotLog("evento 'error': " + e.error);
-    if(e.error === "not-allowed" || e.error === "service-not-allowed"){
-      micBtn.classList.add("paused");
-      showToast("Preciso de permissão pro microfone. Toque no personagem pra tentar de novo.");
-      finalChunks = "";
-      setListening(false);
-      if(silenceTimer){ clearTimeout(silenceTimer); silenceTimer = null; }
-      return;
-    }
-    if(finalChunks.trim()){
-      larotLog("erro no meio da fala, mas já tinha texto — processando mesmo assim");
-      processAndReset();
-      return;
-    }
-    if(e.error === "no-speech"){
-      showToast("Não ouvi nada, tenta de novo.");
-    } else if(e.error === "network"){
-      showToast("Falha de conexão com o reconhecimento de voz. Tenta de novo.");
-    }
-    setListening(false);
-    if(silenceTimer){ clearTimeout(silenceTimer); silenceTimer = null; }
-  });
-
-  micBtn.addEventListener("click", function(){
-    if(!window.LarotBridge || !window.LarotBridge.isReady()){
-      showToast("Faça login primeiro.");
-      return;
-    }
-    if(listening){
-      // toca de novo pra encerrar e processar antes do silêncio automático
-      finishListening();
-      return;
-    }
-    micBtn.classList.remove("paused");
-    finalChunks = "";
-    setListening(true);
-    showToast("Ouvindo... (toca de novo quando terminar de falar)", 0);
-    larotLog("iniciando escuta (recognition.start)");
-    try{
-      recognition.start();
-    }catch(e){
-      larotLog("erro ao chamar start(): " + e);
-      setListening(false);
-    }
-  });
-})();
 </script>
 </body>
 </html>
